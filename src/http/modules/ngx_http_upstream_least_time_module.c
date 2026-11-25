@@ -12,6 +12,10 @@
 #define NGX_HTTP_UPSTREAM_LT_HEADER     0
 #define NGX_HTTP_UPSTREAM_LT_LAST_BYTE  1
 
+#ifndef NGX_LT_BUCKET
+#define NGX_LT_BUCKET  20
+#endif
+
 
 typedef struct {
     ngx_uint_t                         mode;
@@ -253,6 +257,16 @@ ngx_http_upstream_get_least_time_peer(ngx_peer_connection_t *pc, void *data)
 
         eta = ngx_http_upstream_least_time_eta(ltp, peer);
 
+#if (NGX_LT_TRACE)
+        ngx_log_error(NGX_LOG_NOTICE, pc->log, 0,
+                      "lt-trace cand t=%M pid=%P peer=%V hdr=%M resp=%M "
+                      "ift=%M ifr=%ui conns=%ui w=%i eta=%ui",
+                      ngx_current_msec, ngx_pid, &peer->name,
+                      peer->header_time, peer->response_time,
+                      peer->inflight_time, peer->inflight_reqs,
+                      peer->conns, peer->weight, eta);
+#endif
+
         if (best == NULL
             || eta * best->weight < best_eta * peer->weight)
         {
@@ -324,6 +338,12 @@ ngx_http_upstream_get_least_time_peer(ngx_peer_connection_t *pc, void *data)
     }
 
     best->current_weight -= total;
+
+#if (NGX_LT_TRACE)
+    ngx_log_error(NGX_LOG_NOTICE, pc->log, 0,
+                  "lt-trace pick t=%M pid=%P peer=%V many=%ui",
+                  ngx_current_msec, ngx_pid, &best->name, many);
+#endif
 
 #if (NGX_HTTP_UPSTREAM_SID)
 best_chosen:
@@ -454,7 +474,7 @@ ngx_http_upstream_least_time_eta(ngx_http_upstream_lt_peer_data_t *ltp,
          * divide response times into clusters to allow round-robin for peers
          * with close response times
          */
-        rt += 20 - rt % 20;
+        rt += NGX_LT_BUCKET - rt % NGX_LT_BUCKET;
     }
 
     /*

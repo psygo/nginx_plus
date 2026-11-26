@@ -155,10 +155,36 @@ def report():
     print(out)
 
 
+def figs():
+    """results/figs/smooth_weighting-{light,dark}.png"""
+    import charts
+    by = index(load("smooth_weighting.json"))
+    comps = [("pd_b5_s3000", "p123_b5_s3", "dispatch gap, smooth=3s"),
+             ("pt_b5_s3000", "p123_b5_s3", "typical gap, smooth=3s"),
+             ("pd_b5_s10000", "pb5_s10000", "dispatch gap, smooth=10s"),
+             ("pt_b5_s10000", "pb5_s10000", "typical gap, smooth=10s")]
+    avg, worst = [], []
+    for a, b, _ in comps:
+        rs = [ratio(by[(sc, u, a)], by[(sc, u, b)])[0] for sc in PR_SCEN + ROBUST for u in UTILS]
+        avg.append((math.exp(mean(math.log(r) for r in rs)) - 1) * 100)
+        worst.append((max(rs) - 1) * 100)
+
+    def fig(t):
+        return charts.grouped_bars(
+            t, "Removing the bias of smooth= does not help the tail",
+            ["Two unbiased weightings vs patch 3's, which over-weights slow responses on busy servers.",
+             "p99 change over 18 scenarios × 4 loads, 10 paired seeds each; above 0 is worse."],
+            [c[2] for c in comps], [("average", avg, 0), ("worst cell", worst, 1)],
+            "p99 change vs patch 3 (same smooth)", label_series=[0, 1], label_w=200)
+    charts.render(fig, "smooth_weighting", os.path.join(common.RESULTS, "figs"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
     if cmd == "run":
         run_jobs(jobs(), "smooth_weighting.json")
         report()
+    elif cmd == "figs":
+        figs()
     else:
         report()

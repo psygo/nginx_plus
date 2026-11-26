@@ -168,11 +168,41 @@ def report():
     print(out)
 
 
+def figs():
+    """results/figs/admission_hetero8-{light,dark}.png"""
+    import charts
+    rows = common.load("admission.json")
+    by, rej = {}, {}
+    for r in rows:
+        k = (r["scenario"], r["util"], r["policy_name"])
+        by.setdefault(k, {})[r["seed"]] = r["p99"]
+        rej.setdefault(k, []).append(r["rejected"])
+    pols = ["reject:1", "reject:2", "reject:4", "queue:1:500", "queue:2:500"]
+    sc = "hetero8"
+
+    def label(p):
+        share = 100 * sum(rej[(sc, 0.95, p)]) / len(rej[(sc, 0.95, p)])
+        return f"{p} · rejects {share:.1f} %" if share >= 0.05 else f"{p} · rejects none"
+    series = [(f"{int(u * 100)} % load", [(ratio(by[(sc, u, p)], by[(sc, u, "none")])[0] - 1) * 100
+                                          for p in pols], slot)
+              for u, slot in ((0.85, 1), (0.95, 0))]
+
+    def fig(t):
+        return charts.grouped_bars(
+            t, "Holding requests back shortens the tail, at a price",
+            ["8 servers of unequal speed, patched least_time; p99 of the requests served, vs no limit.",
+             "reject:K is max_conns=K; queue:K:T waits up to T ms (NGINX Plus). Share rejected at 95 % load."],
+            [label(p) for p in pols], series, "p99 change vs no limit", label_series=1, label_w=260)
+    charts.render(fig, "admission_hetero8", os.path.join(common.RESULTS, "figs"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
     if cmd == "run":
         run_jobs_ext(jobs(), "admission.json")
         report()
+    elif cmd == "figs":
+        figs()
     elif cmd == "report":
         report()
     elif cmd == "smoke":

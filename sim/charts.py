@@ -116,6 +116,23 @@ def pct(v, signed=True):
     return s.replace("-", "−")
 
 
+def pct_tick(v):
+    """Axis tick: exact (+2.5 %, not a rounded +2 %)."""
+    return f"{v:+g} %".replace("-", "−")
+
+
+def _padded(vals, labelled):
+    """Axis range with room for the labels: 8 % beyond the extremes on the side(s) where
+    labelled values lie."""
+    lo, hi = min(min(vals), 0), max(max(vals), 0)
+    span = (hi - lo) or 1.0
+    if labelled and min(labelled) < 0:
+        lo -= 0.08 * span
+    if labelled and max(labelled) > 0:
+        hi += 0.08 * span
+    return lo, hi
+
+
 def render(fn, name, outdir, scale=2, **kw):
     os.makedirs(outdir, exist_ok=True)
     out = []
@@ -175,7 +192,7 @@ def line_chart(t, title, subtitle, series, xlabel, ylabel, ref=None, w=760, h=38
     return s
 
 
-def _x_axis(s, t, lo, hi, L, R, T, B, label, fmt=pct):
+def _x_axis(s, t, lo, hi, L, R, T, B, label, fmt=pct_tick):
     ticks = nice_ticks(lo, hi, 6)
     X = lambda v: L + (v - ticks[0]) / (ticks[-1] - ticks[0]) * (R - L)   # noqa: E731
     for v in ticks:
@@ -232,7 +249,9 @@ def grouped_bars(t, title, subtitle, cats, series, xlabel, label_series=None, w=
     y = s.header(title, subtitle)
     y = s.legend(24, y + 10, [(n, t["series"][j]) for n, _, j in series]) + 8
     vals = [v for _, vs, _ in series for v in vs]
-    lo, hi = xlim or (min(min(vals), 0), max(max(vals), 0))
+    sel = label_series if isinstance(label_series, (list, tuple)) else (
+        [] if label_series is None else [label_series])
+    lo, hi = xlim or _padded(vals, [v for j in sel for v in series[j][1]])
     L, R, T, B = label_w, w - (110 if xlim else 60), y, h - 52
     X = _x_axis(s, t, lo, hi, L, R, T, B, xlabel)
     edge_lo, edge_hi = nice_ticks(lo, hi, 6)[0], nice_ticks(lo, hi, 6)[-1]
@@ -262,7 +281,7 @@ def dumbbell(t, title, subtitle, rows, names, xlabel, w=760, row_h=34, label_w=2
     y = s.legend(24, y + 10, [(names[0], c0), (names[1], c1)]) + 8
     vals = [v for _, a, b in rows for v in (a, b)]
     L, R, T, B = label_w, w - 40, y, h - 52
-    X = _x_axis(s, t, min(min(vals), 0), max(max(vals), 0), L, R, T, B, xlabel)
+    X = _x_axis(s, t, *_padded(vals, [b for _, _, b in rows]), L, R, T, B, xlabel)
     for i, (label, a, b) in enumerate(rows):
         cy = y + i * row_h + row_h / 2
         s.text(L - 12, cy + 4, label, size=12, color=t["ink2"], anchor="end")

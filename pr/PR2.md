@@ -1,6 +1,10 @@
 Title: Upstream: "bucket" and "smooth" parameters of the "least_time" directive
 
-Depends on #PR1 (fixed rounding of least_time averages); this branch contains that commit plus two more. Documentation: nginx/nginx.org#TBD. Tests: nginx/nginx-tests#TBD.
+This builds on #2048 (fixed rounding of `least_time` averages) and comes from the same simulation and benchmark work described there. With the rounding fixed, `least_time` can tell apart servers that differ by a few milliseconds, but two constants still stop it from doing so: the 20 ms rounding step and the fixed weight of each new response in the average. This PR makes both configurable, as `bucket=` and `smooth=`. Both are off by default, so existing configurations behave exactly as before.
+
+With `bucket=5ms smooth=3s`, p99 latency on real nginx improves by 9-44 % when servers differ in speed and by up to 14 % with a mix of cheap and expensive requests. No tested configuration gets significantly worse than stock `least_time` or `least_conn`.
+
+The branch contains the commit of #2048 plus two more, so only the last two need review here. Documentation: nginx/nginx.org#TBD. Tests: nginx/nginx-tests#TBD.
 
 ## Problem
 
@@ -37,6 +41,8 @@ nginx master and patched trees, `-O2`, in a Linux VM (Docker Desktop, 12 vCPUs o
 
 p99 change with `bucket=5ms smooth=3s` (geometric mean of paired ratios, 95 % CI):
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_real-dark.png"><img alt="Real nginx: p99 change with bucket=5ms smooth=3s vs stock least_time per scenario, with 95 % confidence intervals" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_real-light.png"></picture>
+
 | scenario | load | vs stock least_time | vs least_conn |
 | --- | --- | --- | --- |
 | 3 servers, 2/6/15 ms mean | 50 % | **-44 %** [-46, -42] | -55 % [-57, -53] |
@@ -61,6 +67,8 @@ p99 change with `bucket=5ms smooth=3s` (geometric mean of paired ratios, 95 % CI
 No configuration is significantly worse than stock `least_time` or than `least_conn`.
 
 Each parameter is needed. p99 vs stock, same runs:
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_params-dark.png"><img alt="p99 change vs stock least_time with bucket=5ms only, smooth=3s only, and both, on real nginx" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_params-light.png"></picture>
 
 | scenario | load | bucket=5ms only | smooth=3s only | both |
 | --- | --- | --- | --- | --- |
@@ -123,5 +131,3 @@ Parameter sweep (8 scenarios, mean p99 change vs stock / worst scenario):
 ## Release Notes
 
 Feature: the "bucket" and "smooth" parameters of the "least_time" directive.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

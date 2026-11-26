@@ -223,6 +223,39 @@ def report():
     print(out)
 
 
+def figs():
+    """results/figs/learning_augmented-{light,dark}.png"""
+    import math
+    import charts
+    rows = common.load("learning_augmented.json")
+    by = {}
+    for r in rows:
+        g, pred = r["scenario"].split("_")[1:]
+        b = r["balancer"]
+        if b in ("p123_b5_s3", "least_conn", "oracle"):
+            pred = "-"
+        by.setdefault((g, r["util"], b, pred), {})[r["seed"]] = r["p99"]
+
+    def cells(b, pred):
+        return [ratio(by[(g, u, b, pred)], by[(g, u, "p123_b5_s3", "-")])[0]
+                for g in GROUPS for u in UTILS]
+    good = [(math.exp(sum(math.log(x) for x in cells(b, "model")) / len(cells(b, "model"))) - 1) * 100
+            for b in BALS]
+    worst = [(max(cells(b, "inverted")) - 1) * 100 for b in BALS]
+    names = {"aug_0": "floor, ε = 0", "aug_0.25": "floor, ε = 0.25", "aug_1": "floor, ε = 1",
+             "ai_only": "no floor"}
+
+    def fig(t):
+        return charts.grouped_bars(
+            t, "A floor bounds the damage of a bad model",
+            ["The model may only choose among servers within (1 + ε) of least_time's best estimate.",
+             "p99 vs patched least_time over 4 server groups × 2 loads, 10 paired seeds each."],
+            [names[b] for b in BALS],
+            [("good model: average", good, 0), ("inverted model: worst cell", worst, 1)],
+            "p99 change vs patched least_time", label_series=[0, 1], xlim=(-50, 50), label_w=170)
+    charts.render(fig, "learning_augmented", os.path.join(common.RESULTS, "figs"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
     if cmd == "run":
@@ -230,6 +263,8 @@ if __name__ == "__main__":
         report()
     elif cmd == "report":
         report()
+    elif cmd == "figs":
+        figs()
     elif cmd == "smoke":
         print("model buckets:", len(model()))
         for pred in PREDICTORS:

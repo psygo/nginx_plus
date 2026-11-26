@@ -220,9 +220,10 @@ def forest(t, title, subtitle, rows, xlabel, w=760, row_h=24, label_w=250, note=
 
 
 def grouped_bars(t, title, subtitle, cats, series, xlabel, label_series=None, w=760,
-                 bar_h=12, gap=2, group_gap=16, label_w=230):
+                 bar_h=12, gap=2, group_gap=16, label_w=230, xlim=None):
     """Horizontal bars per category, one per series. series: (name, [values in %], slot).
-    Values of `label_series` (an index) are printed at the bar tips."""
+    Values of `label_series` (an index) are printed at the bar tips. xlim=(lo, hi) clips
+    the axis: a bar beyond it runs to the edge and its true value is printed past it."""
     k = len(series)
     grp_h = k * bar_h + (k - 1) * gap
     hdr = 66 + 18 * (len(subtitle) - 1 if isinstance(subtitle, (list, tuple)) else 0)
@@ -231,18 +232,22 @@ def grouped_bars(t, title, subtitle, cats, series, xlabel, label_series=None, w=
     y = s.header(title, subtitle)
     y = s.legend(24, y + 10, [(n, t["series"][j]) for n, _, j in series]) + 8
     vals = [v for _, vs, _ in series for v in vs]
-    L, R, T, B = label_w, w - 60, y, h - 52
-    X = _x_axis(s, t, min(min(vals), 0), max(max(vals), 0), L, R, T, B, xlabel)
+    lo, hi = xlim or (min(min(vals), 0), max(max(vals), 0))
+    L, R, T, B = label_w, w - (110 if xlim else 60), y, h - 52
+    X = _x_axis(s, t, lo, hi, L, R, T, B, xlabel)
+    edge_lo, edge_hi = nice_ticks(lo, hi, 6)[0], nice_ticks(lo, hi, 6)[-1]
     for i, cat in enumerate(cats):
         gy = y + 6 + i * (grp_h + group_gap)
         s.text(L - 12, gy + grp_h / 2 + 4, cat, size=12, color=t["ink2"], anchor="end")
         for j, (name, vs, slot) in enumerate(series):
             by = gy + j * (bar_h + gap)
-            s.hbar(X(0), X(vs[i]), by, bar_h, t["series"][slot])
-            if label_series == j:
-                v = vs[i]
-                s.text(X(v) + (-6 if v < 0 else 6), by + bar_h - 2, pct(v), size=11.5,
-                       color=t["ink"], anchor="end" if v < 0 else "start", weight="bold")
+            v = vs[i]
+            vd = min(max(v, edge_lo), edge_hi)
+            s.hbar(X(0), X(vd), by, bar_h, t["series"][slot])
+            if label_series == j or vd != v:
+                text = pct(v) + (" ›" if vd > v or vd < v else "")
+                s.text(X(vd) + (-6 if vd < 0 else 6), by + bar_h - 2, text, size=11.5,
+                       color=t["ink"], anchor="end" if vd < 0 else "start", weight="bold")
     return s
 
 

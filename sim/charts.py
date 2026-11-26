@@ -111,7 +111,9 @@ def nice_ticks(lo, hi, n=5):
 
 
 def pct(v, signed=True):
-    """Percent label with a real minus sign."""
+    """Percent label with a real minus sign; values that round to zero print as 0 %."""
+    if abs(v) < 0.5:
+        return "0 %"
     s = f"{v:+.0f} %" if signed else f"{v:.0f} %"
     return s.replace("-", "−")
 

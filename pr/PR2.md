@@ -41,6 +41,8 @@ nginx master and patched trees, `-O2`, in a Linux VM (Docker Desktop, 12 vCPUs o
 
 p99 change with `bucket=5ms smooth=3s` (geometric mean of paired ratios, 95 % CI):
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_real-dark.png"><img alt="Real nginx: p99 change with bucket=5ms smooth=3s vs stock least_time per scenario, with 95 % confidence intervals" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_real-light.png"></picture>
+
 | scenario | load | vs stock least_time | vs least_conn |
 | --- | --- | --- | --- |
 | 3 servers, 2/6/15 ms mean | 50 % | **-44 %** [-46, -42] | -55 % [-57, -53] |
@@ -65,6 +67,8 @@ p99 change with `bucket=5ms smooth=3s` (geometric mean of paired ratios, 95 % CI
 No configuration is significantly worse than stock `least_time` or than `least_conn`.
 
 Each parameter is needed. p99 vs stock, same runs:
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_params-dark.png"><img alt="p99 change vs stock least_time with bucket=5ms only, smooth=3s only, and both, on real nginx" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_params-light.png"></picture>
 
 | scenario | load | bucket=5ms only | smooth=3s only | both |
 | --- | --- | --- | --- | --- |

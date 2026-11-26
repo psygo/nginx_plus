@@ -30,7 +30,7 @@ Explorations, opened inside this fork against `least-time-work` (not sent to ngi
 | PR | branch | verdict |
 | --- | --- | --- |
 | [#1](https://github.com/psygo/nginx_plus/pull/1): worker processes with and without `zone` | `explore/zone-workers` | docs note drafted (local nginx.org branch) |
-| [#2](https://github.com/psygo/nginx_plus/pull/2): learn how response time grows with load | `explore/speed-estimator` | not ready: diverges on processor-sharing backends |
+| [#2](https://github.com/psygo/nginx_plus/pull/2): learn how response time grows with load | `explore/speed-estimator` | candidate: −8.2 % p99 vs PR 2 after fixing a slope collapse; worst +18 % |
 | [#3](https://github.com/psygo/nginx_plus/pull/3): routing by request cost | `explore/cost-routing` | promising, needs a way to get cost hints |
 | [#4](https://github.com/psygo/nginx_plus/pull/4): admission control and queueing | `explore/admission-control` | existing features; docs note at most |
 | [#5](https://github.com/psygo/nginx_plus/pull/5): learning-augmented balancing with a floor | `explore/learning-augmented` | research only |

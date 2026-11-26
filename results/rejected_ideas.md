@@ -55,7 +55,7 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | idea | result | where |
 | --- | --- | --- |
 | `bucket=1ms` as the recommendation | Breaks re-probing of a server whose average was halved by the inactivity decay; the existing nginx-tests "response time decay probe" test fails. 5 ms keeps the re-probing and is within noise of 1 ms on latency. | `PLAN.md`, patch 2 notes |
-| A smaller `bucket` with integer averages | Gains mostly vanish because the 10 ms rounding error dominates: -2 to -6 % instead of -9 to -42 %. This is why PR 1 exists. | `pr/PR1.md` table |
+| A smaller `bucket` with integer averages | Gains mostly vanish because the 10 ms rounding error dominates: -3 to -5 % instead of -9 to -42 % (`sim_pr1_bucket.json`). This is why PR 1 exists. | `pr/PR1.md` table |
 | `bucket` without smoothing | Worse on mixed 2 ms / 80 ms requests: +1 to +8 % p99 vs stock. This is why `bucket` and `smooth` travel together in PR 2. | `sim_pr.md`, P1+P2 column |
 | `smooth=1s` | Too short for slow backends: +17 to +20 % on 20/60/150 ms servers. 3 s and 10 s are both fine. | `sim_pr.md`, sweep |
 | Two smoothing knobs (`alpha=` and a time floor) | Not tested as a separate design; dropped in favor of one `smooth=` time to keep the interface small. | decision, 2026-11-25 |

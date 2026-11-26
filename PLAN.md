@@ -45,7 +45,7 @@ Six `explore/*` branches, each with code, tests, results and report, have PRs in
 | PR | branch | verdict |
 | --- | --- | --- |
 | [#1](https://github.com/psygo/nginx_plus/pull/1) | `explore/zone-workers` | Without `zone`, 4 workers cost least_conn +16…36 % and patched least_time +11…20 % p99 on real nginx; the sim agrees. Docs note drafted locally on an nginx.org branch (`zone-workers-note`). |
-| [#2](https://github.com/psygo/nginx_plus/pull/2) | `explore/speed-estimator` | Learning `rt = a + b·conns` nearly matches the true-capacity rule, but diverges on processor-sharing backends near saturation (+642 %). Next: lower bound on the slope. |
+| [#2](https://github.com/psygo/nginx_plus/pull/2) | `explore/speed-estimator` | Learning `rt = a + b·conns` per server. Round 1 diverged on CPU-sharing backends (slope collapse, +642 %); a slope floor `b >= 0.25·a` plus fitting on the average load fixes it: −8.2 % p99 vs PR 2 over 72 cells, worst +18 % (slowdown_ps@0.7). Candidate for a later PR; open: remaining losses, C state (~7 fields), real-nginx check. |
 | [#3](https://github.com/psygo/nginx_plus/pull/3) | `explore/cost-routing` | With exact per-class cost hints, least-work routing gives −15…−58 %. It degrades with noisy hints and needs a way for nginx to get the hint. |
 | [#4](https://github.com/psygo/nginx_plus/pull/4) | `explore/admission-control` | `max_conns` / `queue` cut the tail a lot, but this is existing (or NGINX Plus) functionality, so at most a docs note. |
 | [#5](https://github.com/psygo/nginx_plus/pull/5) | `explore/learning-augmented` | A least_time shortlist bounds damage (+43 % worst vs +1625 % without), per decision rather than per outcome; eps 0.25 trades −16 %/+16 %. Research only. |

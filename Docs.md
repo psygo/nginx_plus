@@ -36,6 +36,8 @@ Explorations, opened inside this fork against `least-time-work` (not sent to ngi
 | [#5](https://github.com/psygo/nginx_plus/pull/5): learning-augmented balancing with a floor | `explore/learning-augmented` | research only |
 | [#6](https://github.com/psygo/nginx_plus/pull/6): unbiased `smooth=` weighting | `explore/smooth-weighting` | rejected; PR 2 unchanged |
 
+The simulator is also published on its own, for reuse beyond these pull requests: [psygo/lbsim](https://github.com/psygo/lbsim) (the same engine, the scenarios behind the PRs, a comparison tool, the queueing-theory validation and tests).
+
 ## Reports
 
 - [results/sim_pr.md](results/sim_pr.md): simulation, 12 scenarios × 4 loads, 20 paired seeds × 300,000 requests per cell, plus a bucket × smooth sweep (10 seeds × 200,000).

@@ -113,5 +113,41 @@ def main():
     print(out)
 
 
+def figs():
+    """results/figs/zone_workers-{light,dark}.png: p99 change vs 1 worker."""
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, "sim"))
+    import charts
+    rows = [json.loads(x) for x in open(os.path.join(RES, "linux_zone.jsonl")) if x.strip()]
+    bad = {id(r) for r in disturbed(rows, lambda r: (r["scenario"], r["util"]))}
+    by = {}
+    for r in rows:
+        if id(r) not in bad:
+            by.setdefault((r["scenario"], r["util"], r["variant"], cfg(r)), {})[r["rep"]] = r["p99"]
+
+    def gm(a, b):
+        reps = sorted(set(a) & set(b))
+        return (math.exp(sum(math.log(a[k] / b[k]) for k in reps) / len(reps)) - 1) * 100
+    short = {"least_conn": "least_conn", "lt": "least_time", "p123_b5_s3": "least_time patched"}
+    cats, keys = [], []
+    for v in LABEL:
+        for sc in ("fast3", "hetero8", "homog8"):
+            cats.append(f"{short[v]} · {sc}")
+            keys.append((sc, 0.85, v))
+    series = [(name, [gm(by[k + (c,)], by[k + ("1 worker",)]) for k in keys], slot)
+              for c, name, slot in (("4 workers + zone", "with zone", 2),
+                                    ("4 workers, no zone", "no zone, reuseport", 1),
+                                    ("4 workers, no zone, no reuseport", "no zone (nginx's default listen)", 0))]
+
+    def fig(t):
+        return charts.grouped_bars(
+            t, "Without zone, each worker balances alone",
+            ["Real nginx with 4 worker processes, p99 change vs 1 worker; 85 % load, 5 paired",
+             "repetitions. With zone the workers share one state and match a single worker."],
+            cats, series, "p99 change vs 1 worker", label_series=2, bar_h=10, label_w=210)
+    charts.render(fig, "zone_workers", os.path.join(RES, "figs"))
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    figs() if sys.argv[1:] == ["figs"] else main()

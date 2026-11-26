@@ -459,6 +459,36 @@ def report():
     print(out)
 
 
+def figs():
+    """results/figs/cost_routing-{light,dark}.png"""
+    import charts
+    rows = common.load("cost_robust.json")
+    by = {}
+    for r in rows:
+        by.setdefault((r["scenario"], r["util"], r["balancer"]), {})[r["seed"]] = r["p99"]
+    kinds = [("fcfs", "one request at a time"), ("_ps", "processor sharing"),
+             ("_c4", "4 workers per server"), ("_mix", "a mix of all three")]
+    series = []
+    for b, name, slot in (("least_work_w", "told each request's cost and each server's capacity", 1),
+                          ("learned_cost", "learned from response times (no hint)", 0)):
+        vals = []
+        for k, _ in kinds:
+            scs = [sc for sc in ROBUST_SCEN
+                   if (sc.endswith(k) if k != "fcfs" else not sc.endswith(("_ps", "_c4", "_mix")))]
+            rs = [ratio(by[(sc, u, b)], by[(sc, u, "p123_b5_s3")])[0] for sc in scs for u in UTILS]
+            vals.append((math.exp(mean(math.log(r) for r in rs)) - 1) * 100)
+        series.append((name, vals, slot))
+
+    def fig(t):
+        return charts.grouped_bars(
+            t, "Routing by learned request cost",
+            ["Least outstanding work, with route costs and server speeds learned from response times,",
+             "vs being told them. p99 vs patched least_time; 3 workloads (up to 50 routes), 70 and 85 % load."],
+            [k[1] for k in kinds], series, "p99 change vs patched least_time (geometric mean)",
+            label_series=[0, 1], label_w=190)
+    charts.render(fig, "cost_routing", os.path.join(common.RESULTS, "figs"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
     if cmd == "run":
@@ -494,6 +524,8 @@ if __name__ == "__main__":
     elif cmd == "learned":
         run_jobs_ext(jobs_learned(), "cost_learned.json", label="cost_learned")
         report()
+    elif cmd == "figs":
+        figs()
     elif cmd == "report":
         report()
     elif cmd == "smoke":

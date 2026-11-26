@@ -16,6 +16,54 @@
 #define NGX_LT_BUCKET  20
 #endif
 
+/*
+ * Experiment knobs (lt-trace branch only):
+ *   NGX_LT_FP     store EWMAs in fixed point (1/1000 ms) instead of whole ms,
+ *                 removing the +-10 ms dead band of the integer EWMA
+ *   NGX_LT_ALPHA  per-sample EWMA weight (stock: 0.05)
+ *   NGX_LT_TAU    if > 0, weight is max(alpha, dt / tau) where dt is the time
+ *                 since the peer's previous sample (ms)
+ */
+#if (NGX_LT_FP)
+#define NGX_LT_SCALE  1000
+#else
+#define NGX_LT_SCALE  1
+#endif
+#ifndef NGX_LT_ALPHA
+#define NGX_LT_ALPHA  0.05
+#endif
+#ifndef NGX_LT_TAU
+#define NGX_LT_TAU    0
+#endif
+
+#define ngx_lt_avg(avg, v, a)                                                 \
+    *(avg) = *(avg) ? (ngx_msec_t) (0.5 + (double) (v) * NGX_LT_SCALE * (a)    \
+                                    + (double) (*(avg)) * (1.0 - (a)))        \
+                    : (ngx_msec_t) (v) * NGX_LT_SCALE
+
+
+static double
+ngx_lt_alpha(ngx_http_upstream_rr_peer_t *peer)
+{
+    double  a, x;
+
+    a = NGX_LT_ALPHA;
+
+    if (NGX_LT_TAU > 0 && peer->lt_last) {
+        x = (double) (ngx_current_msec - peer->lt_last) / NGX_LT_TAU;
+        if (x > 1.0) {
+            x = 1.0;
+        }
+        if (x > a) {
+            a = x;
+        }
+    }
+
+    peer->lt_last = ngx_current_msec;
+
+    return a;
+}
+
 
 typedef struct {
     ngx_uint_t                         mode;
@@ -247,7 +295,7 @@ ngx_http_upstream_get_least_time_peer(ngx_peer_connection_t *pc, void *data)
             ift = peer->inflight_last / peer->inflight_reqs
                   + (ngx_current_msec - peer->inflight_reqs_changed);
 
-            ngx_http_upstream_response_time_avg(&peer->inflight_time, ift);
+            ngx_lt_avg(&peer->inflight_time, ift, NGX_LT_ALPHA);
         }
 
         /*
@@ -462,6 +510,8 @@ ngx_http_upstream_least_time_eta(ngx_http_upstream_lt_peer_data_t *ltp,
         rt = ngx_max(rt, peer->inflight_time);
     }
 
+    rt = (rt + NGX_LT_SCALE / 2) / NGX_LT_SCALE;
+
     if (rt > 5000) {
         /*
          * consider peers with response time greater than max equally bad
@@ -527,7 +577,7 @@ ngx_http_upstream_least_time_notify(ngx_peer_connection_t *pc, void *data,
     ngx_http_upstream_rr_peers_rlock(peers);
     ngx_http_upstream_rr_peer_lock(peers, peer);
 
-    ngx_http_upstream_response_time_avg(metric, last);
+    ngx_lt_avg(metric, last, ngx_lt_alpha(peer));
 
     if (ltp->inflight) {
         ngx_http_upstream_least_time_inflight_done(ltp, peers, peer, last);
@@ -569,6 +619,7 @@ ngx_http_upstream_free_least_time_peer(ngx_peer_connection_t *pc,
 {
     ngx_http_upstream_lt_peer_data_t *ltp = data;
 
+    double                             a;
     ngx_http_upstream_t               *u;
     ngx_http_upstream_rr_peer_t       *peer;
     ngx_http_upstream_rr_peers_t      *peers;
@@ -602,8 +653,9 @@ ngx_http_upstream_free_least_time_peer(ngx_peer_connection_t *pc,
         goto done;
     }
 
-    ngx_http_upstream_response_time_avg(&peer->response_time,
-                                        u->state->response_time);
+    a = ngx_lt_alpha(peer);
+
+    ngx_lt_avg(&peer->response_time, u->state->response_time, a);
 
     if (ltp->conf->use_inflight
         && ltp->conf->mode == NGX_HTTP_UPSTREAM_LT_HEADER)
@@ -611,8 +663,7 @@ ngx_http_upstream_free_least_time_peer(ngx_peer_connection_t *pc,
         goto done;
     }
 
-    ngx_http_upstream_response_time_avg(&peer->header_time,
-                                        u->state->header_time);
+    ngx_lt_avg(&peer->header_time, u->state->header_time, a);
 
 done:
 

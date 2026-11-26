@@ -98,6 +98,7 @@ struct ngx_http_upstream_rr_peer_s {
     ngx_msec_t                      inflight_last;
     ngx_msec_t                      inflight_reqs_changed;
     ngx_uint_t                      inflight_reqs;
+    ngx_msec_t                      lt_last;    /* lt-trace experiment */
 #endif
 
     NGX_COMPAT_BEGIN(7)

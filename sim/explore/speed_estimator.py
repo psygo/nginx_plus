@@ -480,6 +480,34 @@ def report():
     print(out)
 
 
+def figs():
+    """results/figs/speed_estimator-{light,dark}.png: per scenario, geometric mean over the
+    four loads, vs patched least_time."""
+    import math
+    import charts
+    by = index(load("speed_full.json") + load("speed_full2.json") + load("speed_full3.json"))
+    final = "hin_cfg_s10000_l4_f0.5_avg"
+    scen = PR_SCEN + ROBUST
+    series = []
+    for b, name, slot in ((ROUND1, "round 1: a straight line", 1),
+                          (final, "final: hinge, configured worker count", 0),
+                          ("sed_true", "reference: told the true speeds", 2)):
+        vals = []
+        for sc in scen:
+            rs = [ratio(by[(sc, u, b)], by[(sc, u, "p123_b5_s3")])[0] for u in (0.5, 0.7, 0.85, 0.95)]
+            vals.append((math.exp(mean(math.log(r) for r in rs)) - 1) * 100)
+        series.append((name, vals, slot))
+
+    def fig(t):
+        return charts.grouped_bars(
+            t, "Learning how response time grows with load",
+            ["p99 vs patched least_time (PR 2), geometric mean over 50, 70, 85 and 95 % load,",
+             "10 paired seeds each. Round 1's slope collapsed on CPU-sharing servers in overload."],
+            scen, series, "p99 change vs patched least_time", label_series=1,
+            xlim=(-40, 40), bar_h=9, gap=2, group_gap=12, label_w=140)
+    charts.render(fig, "speed_estimator", os.path.join(common.RESULTS, "figs"))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "tune"
     if cmd == "tune":
@@ -513,6 +541,8 @@ if __name__ == "__main__":
         print("full matrix with", names)
         run_jobs(jobs_full3(names), "speed_full3.json", label="speed_full3")
         report()
+    elif cmd == "figs":
+        figs()
     elif cmd == "report":
         report()
     elif cmd == "smoke":

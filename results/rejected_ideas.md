@@ -60,6 +60,9 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | `smooth=1s` | Too short for slow backends: +17 to +20 % on 20/60/150 ms servers. 3 s and 10 s are both fine. | `sim_pr.md`, sweep |
 | Two smoothing knobs (`alpha=` and a time floor) | Not tested as a separate design; dropped in favor of one `smooth=` time to keep the interface small. | decision, 2026-11-25 |
 | Peak EWMA (Finagle/Linkerd estimator) | Good on unequal servers with mixed requests (bimodal4_het, -20 % vs stock), about equal to `least_time` with a small bucket elsewhere. Not pursued: `smooth=` gets most of the same benefit inside the existing directive. | `sim_h3.json`, `sim_h6.json` |
+| Speed estimator (exploration #1) without a slope floor | The learned cost per connection collapses to 0 in overload on CPU-sharing backends, and requests herd onto one server at a time: +642 % on slowdown_ps at 85 % load, runaways in 2 of 10 seeds on hetero8_ps and fast3_ps at 95 %. Fixed by `b >= 0.25 * a`. | `speed_estimator.md`, round 1 |
+| Speed estimator fitted on the average load over each request's life, without a slope floor | Sounds like the principled fix (a CPU-sharing server's speed depends on the load during the request), but it removes only some runaways: still +542 % on slowdown_ps at 85 %. Kept as a complement to the floor, where it helps at 95 % load. | `speed_estimator.md`, round 2 |
+| Speed estimator with a 3 s memory instead of 10 s | Worse on average (-3.5 to -5.2 % vs -5.0 to -6.8 % in round 2) and not better on the slowdown scenarios, where a faster reaction was expected to help. | `speed_estimator.md`, round 2 |
 
 ## 4. Benchmark methods that were dropped
 

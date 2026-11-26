@@ -21,7 +21,7 @@ The code lives on other branches of this fork:
 | PR | branch | status | description |
 | --- | --- | --- | --- |
 | [nginx/nginx#2048](https://github.com/nginx/nginx/pull/2048): fixed rounding of least_time averages | `lt-fixed-point` | open, F5 CLA signed (2026-11-26) | [pr/PR1.md](pr/PR1.md) |
-| PR 2: `bucket` and `smooth` parameters of `least_time` | `lt-smooth` | not opened yet; depends on #2048 | [pr/PR2.md](pr/PR2.md) |
+| [nginx/nginx#2050](https://github.com/nginx/nginx/pull/2050): `bucket` and `smooth` parameters of `least_time` | `lt-smooth` | open; depends on #2048 (#2049 was opened from `least-time-work` by mistake and closed) | [pr/PR2.md](pr/PR2.md) |
 | PR 2 tests (nginx/nginx-tests) | local only | not opened yet; needs a fork of nginx-tests | `patches/tests-pr2-*` |
 | PR 2 docs (nginx/nginx.org) | local only | not opened yet; needs a fork of nginx.org | `patches/docs-pr2-*` |
 

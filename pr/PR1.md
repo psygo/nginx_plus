@@ -6,6 +6,8 @@ This PR is the smallest of those findings: a rounding error in the averages leas
 
 The simulator, data and benchmark scripts are in [this branch](https://github.com/psygo/nginx_plus/tree/least-time-evidence). I couldn't find a load-balancing simulator in the nginx ecosystem; if one would be useful, I'd be happy to open a discussion about it.
 
+Follow-up: #2050 makes the 20 ms clustering configurable (`bucket=`) and adds time-based smoothing (`smooth=`); it depends on this fix.
+
 ## Problem
 
 The averages that `least_time` compares are kept in whole milliseconds and updated by `ngx_http_upstream_response_time_avg()` / `ngx_stream_upstream_response_time_avg()` as
@@ -62,3 +64,4 @@ No new test: with the default 20 ms clustering the fix does not change which ser
 ## Release Notes
 
 Bugfix: the "least_time" balancer could use average response times which differed from actual ones by up to 10 milliseconds.
+

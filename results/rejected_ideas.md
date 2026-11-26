@@ -60,6 +60,8 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | `smooth=1s` | Too short for slow backends: +17 to +20 % on 20/60/150 ms servers. 3 s and 10 s are both fine. | `sim_pr.md`, sweep |
 | Two smoothing knobs (`alpha=` and a time floor) | Not tested as a separate design; dropped in favor of one `smooth=` time to keep the interface small. | decision, 2026-11-25 |
 | Peak EWMA (Finagle/Linkerd estimator) | Good on unequal servers with mixed requests (bimodal4_het, -20 % vs stock), about equal to `least_time` with a small bucket elsewhere. Not pursued: `smooth=` gets most of the same benefit inside the existing directive. | `sim_h3.json`, `sim_h6.json` |
+| Learned route costs (exploration #2) without calibration | Learning only from requests that found their server idle stops when it matters: a flooded server is never idle, so a wrong speed estimate is never corrected. Runaways on 4-worker and processor-sharing backends: +26 % on average on 4-worker groups, worst +97 %, one seed 49x the p99 of patched least_time. Fixed by starting unlearned servers on the common speed scale, moving a first sample gradually, and a per-server calibration from every completion. | `cost_routing.md`, robustness; `test_cost_routing.py` |
+| Learned route costs with a fast calibration (weight 0.02, about 50 responses) | The calibration factor is noisy with mixed request costs and costs about a third of the gain: -21.7 % on average vs -26.7 % with 0.002 (about 500 responses), worst cell +5 % vs -8 %. | `cost_cal.json` |
 
 ## 4. Benchmark methods that were dropped
 

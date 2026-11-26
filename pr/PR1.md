@@ -35,13 +35,13 @@ It matters as soon as the clustering is finer than the error. A follow-up pull r
 
 | scenario (simulated, 70 % load unless noted) | bucket=5ms, integer averages | bucket=5ms, this change |
 | --- | --- | --- |
-| 3 servers, 2/6/15 ms mean, 50 % load | -4 % p99 | -42 % p99 |
-| 3 servers, 2/6/15 ms mean | -2 % | -21 % |
+| 3 servers, 2/6/15 ms mean, 50 % load | -5 % p99 | -42 % p99 |
+| 3 servers, 2/6/15 ms mean | -3 % | -22 % |
 | 8 servers of unequal speed, 10 ms mean | -3 % | -11 % |
-| 16 servers of unequal speed, 10 ms mean | -6 % | -13 % |
+| 16 servers of unequal speed, 10 ms mean | -5 % | -12 % |
 | 8 servers of unequal speed, lognormal times | -4 % | -9 % |
 
-p99 relative to stock `least_time`, geometric mean over 10 paired seeds.
+p99 relative to stock `least_time`, geometric mean over 10 paired seeds × 200,000 requests (`results/sim_pr1_bucket.json` in the evidence branch).
 
 ## Testing
 

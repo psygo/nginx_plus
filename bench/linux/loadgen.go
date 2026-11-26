@@ -11,7 +11,7 @@
 // costs for a given seed.
 //
 //	loadgen -url http://127.0.0.1:8899/ -rate 500 -duration 30s -warmup 5s \
-//	        -dist bimodal:2,80,0.1 -seed 1 [-raw lat.txt]
+//	        -dist bimodal:2,80,0.1 -seed 1 [-raw lat.txt (columns: scheduled s, latency ms, send lag ms)]
 //
 // dist: exp:MEAN | bimodal:A,B,P (exponential with mean B with prob P, else A)
 //
@@ -229,7 +229,8 @@ func main() {
 		if err == nil {
 			for _, r := range results {
 				if r.at >= *warmup && !r.err {
-					fmt.Fprintf(f, "%.3f\n", r.lat)
+					// scheduled time (s after start), latency (ms), send lag (ms)
+					fmt.Fprintf(f, "%.4f %.3f %.3f\n", r.at.Seconds(), r.lat, r.lag)
 				}
 			}
 			f.Close()

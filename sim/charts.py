@@ -222,7 +222,7 @@ def forest(t, title, subtitle, rows, xlabel, w=760, row_h=24, label_w=250, note=
 def grouped_bars(t, title, subtitle, cats, series, xlabel, label_series=None, w=760,
                  bar_h=12, gap=2, group_gap=16, label_w=230, xlim=None):
     """Horizontal bars per category, one per series. series: (name, [values in %], slot).
-    Values of `label_series` (an index) are printed at the bar tips. xlim=(lo, hi) clips
+    Values of `label_series` (an index or a list of them) are printed at the bar tips. xlim=(lo, hi) clips
     the axis: a bar beyond it runs to the edge and its true value is printed past it."""
     k = len(series)
     grp_h = k * bar_h + (k - 1) * gap
@@ -244,7 +244,8 @@ def grouped_bars(t, title, subtitle, cats, series, xlabel, label_series=None, w=
             v = vs[i]
             vd = min(max(v, edge_lo), edge_hi)
             s.hbar(X(0), X(vd), by, bar_h, t["series"][slot])
-            if label_series == j or vd != v:
+            labelled = j in label_series if isinstance(label_series, (list, tuple)) else j == label_series
+            if labelled or vd != v:
                 text = pct(v) + (" ›" if vd > v or vd < v else "")
                 s.text(X(vd) + (-6 if vd < 0 else 6), by + bar_h - 2, text, size=11.5,
                        color=t["ink"], anchor="end" if vd < 0 else "start", weight="bold")

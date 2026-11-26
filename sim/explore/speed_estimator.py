@@ -138,6 +138,11 @@ class LinearDelay(RoundRobin):
         s[5] = now
 
     def on_done(self, sim, p, req, now, rt):
+        n, r, w = self._sample(p, req, now, rt)
+        self._update(p, self._s(p), n, r, w)
+
+    def _sample(self, p, req, now, rt):
+        """Bookkeeping for a completed request; returns (n, rt, weight) of its sample."""
         s = self._s(p)
         area = self._area(s, p, now)
         p.conns -= 1
@@ -155,11 +160,107 @@ class LinearDelay(RoundRobin):
             w = 1.0 if dt >= self.smooth else max(dt / self.smooth, self.wmin)
         s[4] = now
         s[6] += 1
+        return n, r, w
+
+    def _update(self, p, s, n, r, w):
         k = 1.0 - w
         s[0] = k * s[0] + w * n
         s[1] = k * s[1] + w * r
         s[2] = k * s[2] + w * n * n
         s[3] = k * s[3] + w * n * r
+
+
+class HingeDelay(LinearDelay):
+    """rt ~ a + b * max(0, n + 1 - k): flat while one of the server's k workers is free,
+    then b per extra request in progress. k = 1 is LinearDelay exactly.
+
+    k: an int for every server; "oracle", the backend's true worker count, standing for a
+    per-server setting the operator configures; or "learn", the candidate in KS whose line
+    leaves the smallest weighted residual variance (ties go to the smaller k).
+
+    The ridge prior assumes a k-worker server, rt = b * (k + x), and the floor is relative
+    to that: b >= floor * a / k."""
+    KS = (1, 2, 4, 8, 16)
+
+    def __init__(self, k="learn", **kw):
+        super().__init__(**kw)
+        assert k in ("learn", "oracle") or (isinstance(k, int) and k >= 1)
+        self.k = k
+        self.name = self.name.replace("linear_delay", f"hinge_delay k={k}")
+        self.h = {}          # per peer: {k: [m_x, m_xx, m_xr], "rr": m_rr}
+        self.cfg = {}        # "oracle": worker count per peer
+
+    def _ks(self, p):
+        if self.k == "learn":
+            return self.KS
+        if self.k == "oracle":
+            return (self.cfg.get(p, 1),)
+        return (self.k,)
+
+    def _h(self, p):
+        h = self.h.get(p)
+        if h is None:
+            h = self.h[p] = {"rr": 0.0}
+        return h
+
+    def on_dispatch(self, sim, p, req, now):
+        if self.k == "oracle" and sim is not None and p not in self.cfg:
+            self.cfg[p] = sim.backends[p.idx].c
+        super().on_dispatch(sim, p, req, now)
+
+    def _update(self, p, s, n, r, w):
+        super()._update(p, s, n, r, w)
+        h, c = self._h(p), 1.0 - w
+        h["rr"] = c * h["rr"] + w * r * r
+        for k in self._ks(p):
+            x = max(0.0, n + 1.0 - k)
+            m = h.setdefault(k, [0.0, 0.0, 0.0])
+            m[0] = c * m[0] + w * x
+            m[1] = c * m[1] + w * x * x
+            m[2] = c * m[2] + w * x * r
+
+    def knee(self, p):
+        ks = self._ks(p)
+        if len(ks) == 1:
+            return ks[0]
+        h, mr = self._h(p), self._s(p)[1]
+        var_r = max(0.0, h["rr"] - mr * mr)
+        best, best_rv = ks[0], None
+        for k in ks:
+            m = h.get(k)
+            if m is None:
+                continue
+            var_x = m[1] - m[0] * m[0]
+            cov = m[2] - m[0] * mr
+            rv = var_r - cov * cov / var_x if var_x > 1e-12 else var_r
+            if best_rv is None or rv < best_rv - 1e-9 * (var_r + 1e-12):
+                best, best_rv = k, rv
+        return best
+
+    def coef(self, p):
+        s = self._s(p)
+        k = self.knee(p)
+        m = self._h(p).get(k)
+        if not s[6] or m is None:
+            return 0.0, 0.0
+        mx, mr = m[0], s[1]
+        var = max(0.0, m[1] - mx * mx)
+        cov = m[2] - mx * mr
+        b = max(0.0, (cov + self.lam * mr) / (var + self.lam * (k + mx)))
+        a = max(0.0, mr - b * mx)
+        if b < self.floor * a / k:
+            a = mr / (1.0 + self.floor * mx / k)
+            b = self.floor * a / k
+        return a, b
+
+    def predict(self, p, now):
+        a, b = self.coef(p)
+        eta = a + b * max(0, p.conns + 1 - self.knee(p))
+        if self.decay:
+            idle = now - self._s(p)[5]
+            if idle > FT_MS:
+                eta *= 0.5 ** int(idle // (FT_MS + 1000))
+        return eta / p.weight
 
 
 def lin_name(smooth, lam, tol=0.0, weighting="completion", floor=0.0, regressor="dispatch"):
@@ -186,6 +287,19 @@ for _s, _l, _f, _r in FIX_GRID:
     register(lin_name(_s, _l, 0.05, "dispatch", _f, _r),
              lambda s=_s, l=_l, f=_f, r=_r: LinearDelay(smooth=s, lam=l, tol=0.05,
                                                         weighting="dispatch", floor=f, regressor=r))
+
+def hin_name(k, lam, floor):
+    """Round 3: HingeDelay with the round-2 settings (10 s memory, tol 0.05, dispatch-gap
+    weighting, average-load regressor). k: "cfg" (configured worker count) or "learn"."""
+    return f"hin_{k}_s10000_l{lam:g}_f{floor:g}_avg"
+
+
+HINGE_GRID = [(k, l, f) for k in ("cfg", "learn") for l in (1, 4) for f in (0.25, 0.5, 1.0)]
+for _k, _l, _f in HINGE_GRID:
+    register(hin_name(_k, _l, _f),
+             lambda k=_k, l=_l, f=_f: HingeDelay(k="oracle" if k == "cfg" else "learn", smooth=10000,
+                                                 lam=l, tol=0.05, weighting="dispatch", floor=f,
+                                                 regressor="avg"))
 
 PR_SCEN = ["fast3", "slow3", "hetero8", "big16", "lognorm_het", "bimodal4",
            "bimodal4_het", "slowdown", "slowdown_ps", "homog8", "fast3_homog", "lognorm4"]
@@ -226,6 +340,34 @@ def jobs_full2(chosen):
             for sc in PR_SCEN + ROBUST for u in (0.5, 0.7, 0.85, 0.95) for k in range(1, 11)]
 
 
+ROUND2 = lin_name(10000, 1, 0.05, "dispatch", 0.25, "avg")   # chosen by round 2
+TUNE3_SCEN = TUNE_SCEN + ["fast3_c4", "slowdown_c4"]
+
+
+def jobs_tune3():
+    """Round 3: the hinge model, on the round-2 scenarios plus the other 4-worker ones."""
+    bals = BASE + [ROUND2] + [hin_name(k, l, f) for k, l, f in HINGE_GRID]
+    return [dict(scenario=sc, util=u, balancer=b, seed=k, n=100_000)
+            for sc in TUNE3_SCEN for u in (0.7, 0.85, 0.95) for b in bals for k in range(1, 6)]
+
+
+def jobs_full3(names):
+    return [dict(scenario=sc, util=u, balancer=b, seed=k, n=200_000)
+            for sc in PR_SCEN + ROBUST for u in (0.5, 0.7, 0.85, 0.95) for b in names
+            for k in range(1, 11)]
+
+
+def pick3(rows, worst_max=1.15):
+    """Best configured-k and best learned-k hinge variant, by the round-2 rule."""
+    ranking = pick(rows, prefix=("hin_", "lin_"))
+    out = {}
+    for kind in ("hin_cfg_", "hin_learn_"):
+        sub = [x for x in ranking if x[2].startswith(kind)]
+        ok = [x for x in sub if x[1] <= worst_max]
+        out[kind[4:-1]] = (ok or sorted(sub, key=lambda x: x[1]))[0][2]
+    return out, ranking
+
+
 def pick2(rows, worst_max=1.15):
     """Robust choice: best geometric mean among variants whose worst cell is at most +15 %
     vs p123_b5_s3; if none qualifies, the one with the best worst cell."""
@@ -234,12 +376,12 @@ def pick2(rows, worst_max=1.15):
     return (ok or sorted(ranking, key=lambda x: x[1]))[0][2], ranking
 
 
-def pick(rows):
+def pick(rows, prefix=("lin_",)):
     """Best linear variant: lowest geometric-mean p99 ratio vs p123_b5_s3, ties to worst case."""
     by = index(rows)
     cells = sorted({(s, u) for s, u, _ in by})
     out = []
-    for b in sorted({b for _, _, b in by if b.startswith("lin_")}):
+    for b in sorted({b for _, _, b in by if b.startswith(prefix)}):
         rs = [ratio(by[(s, u, b)], by[(s, u, "p123_b5_s3")])[0] for s, u in cells]
         g = mean(map(__import__("math").log, rs))
         out.append((__import__("math").exp(g), max(rs), b))
@@ -276,17 +418,36 @@ def report():
                "95 % load (5 seeds × 100,000). Chosen: the best mean among variants whose "
                f"worst cell is at most +15 %: `{chosen2}`.", ""]
         md += _tune_table(ranking2) + [""]
+    chosen3 = {}
+    if os.path.exists(os.path.join(common.RESULTS, "speed_tune3.json")):
+        chosen3, ranking3 = pick3(load("speed_tune3.json"))
+        md += ["## Tuning, round 3: a hinge instead of a line", "",
+               "A server with k workers is not slowed by the first k requests in progress, so "
+               "`HingeDelay` fits rt = a + b * max(0, n + 1 - k); k = 1 is the line of round 2. "
+               "k is either configured per server (`hin_cfg`, the backend's worker count, as an "
+               "operator would state it) or learned (`hin_learn`: of 1, 2, 4, 8, 16, the knee "
+               "with the smallest residual variance). Round-2 settings otherwise; the floor is "
+               "b >= floor * a / k. Scenarios: round 2's plus fast3_c4 and slowdown_c4, at "
+               f"70, 85 and 95 % load. Chosen: `{chosen3.get('cfg')}` and `{chosen3.get('learn')}`.", ""]
+        md += _tune_table(ranking3) + [""]
     if os.path.exists(os.path.join(common.RESULTS, "speed_full.json")):
         full = load("speed_full.json")
         if chosen2 and os.path.exists(os.path.join(common.RESULTS, "speed_full2.json")):
             full = full + load("speed_full2.json")
+        if os.path.exists(os.path.join(common.RESULTS, "speed_full3.json")):
+            full = full + load("speed_full3.json")
         by = index(full)
         lins = [ROUND1] + ([chosen2] if chosen2 and any(k[2] == chosen2 for k in by) else [])
+        lins += [b for b in (chosen3.get("cfg"), chosen3.get("learn")) if b and any(k[2] == b for k in by)]
         cols = ["lt", "sed"] + lins + ["sed_true", "oracle"]
         head = {"lt": "stock lt", "sed": "sed", ROUND1: "linear, round 1",
                 "sed_true": "sed_true", "oracle": "oracle"}
         if len(lins) > 1:
             head[lins[1]] = "linear + fix, round 2"
+        if chosen3.get("cfg") in lins:
+            head[chosen3["cfg"]] = "hinge, configured k"
+        if chosen3.get("learn") in lins:
+            head[chosen3["learn"]] = "hinge, learned k"
         md += ["## Full matrix (10 seeds × 200,000 requests)", "",
                "Geometric mean over paired seeds with 95 % CI. `sed_true` knows the true "
                "server capacities (not implementable); `sed` is the rejected service-rate "
@@ -340,6 +501,17 @@ if __name__ == "__main__":
         chosen = sys.argv[2] if len(sys.argv) > 2 else pick2(load("speed_tune2.json"))[0]
         print("full matrix with", chosen)
         run_jobs(jobs_full2(chosen), "speed_full2.json", label="speed_full2")
+        report()
+    elif cmd == "tune3":
+        rows = run_jobs(jobs_tune3(), "speed_tune3.json", label="speed_tune3")
+        chosen, ranking = pick3(rows)
+        for g, w, b in ranking:
+            print(f"{b:34s} mean {(g - 1) * 100:+.1f} %  worst {(w - 1) * 100:+.0f} %")
+        print("chosen:", chosen)
+    elif cmd == "full3":
+        names = sys.argv[2:] or list(pick3(load("speed_tune3.json"))[0].values())
+        print("full matrix with", names)
+        run_jobs(jobs_full3(names), "speed_full3.json", label="speed_full3")
         report()
     elif cmd == "report":
         report()

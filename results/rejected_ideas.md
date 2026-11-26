@@ -63,6 +63,7 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | Speed estimator (exploration #1) without a slope floor | The learned cost per connection collapses to 0 in overload on CPU-sharing backends, and requests herd onto one server at a time: +642 % on slowdown_ps at 85 % load, runaways in 2 of 10 seeds on hetero8_ps and fast3_ps at 95 %. Fixed by `b >= 0.25 * a`. | `speed_estimator.md`, round 1 |
 | Speed estimator fitted on the average load over each request's life, without a slope floor | Sounds like the principled fix (a CPU-sharing server's speed depends on the load during the request), but it removes only some runaways: still +542 % on slowdown_ps at 85 %. Kept as a complement to the floor, where it helps at 95 % load. | `speed_estimator.md`, round 2 |
 | Speed estimator with a 3 s memory instead of 10 s | Worse on average (-3.5 to -5.2 % vs -5.0 to -6.8 % in round 2) and not better on the slowdown scenarios, where a faster reaction was expected to help. | `speed_estimator.md`, round 2 |
+| Speed estimator with a learned knee (`HingeDelay`, k learned from 1, 2, 4, 8, 16) | -8.6 % vs PR 2 over 72 cells, against -9.5 % when k is configured and -8.2 % for the plain line. At moderate load a 4-worker server rarely has more than 4 requests in progress, so the knee is not identifiable and the fit falls back to k = 1: mixed4 at 85 % stays at +12 % (configured: +1 %). A per-server worker count stated by the operator is simpler and better. | `speed_estimator.md`, round 3 |
 
 ## 4. Benchmark methods that were dropped
 

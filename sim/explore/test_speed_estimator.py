@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common                                          # noqa: E402,F401
-from speed_estimator import FT_MS, LinearDelay         # noqa: E402
+from speed_estimator import FT_MS, HingeDelay, LinearDelay   # noqa: E402
 from lbsim import PeerState, Request                   # noqa: E402
 
 
@@ -181,6 +181,79 @@ class TestLinearDelay(unittest.TestCase):
         avg = self.mean_estimates(weighting="completion")
         self.assertGreater(avg[0], 1.10 * 2 * 20.0)
         self.assertGreater(avg[1], 1.30 * 2 * 60.0)
+
+class TestHingeDelay(unittest.TestCase):
+    """rt ~ a + b * max(0, n + 1 - k): flat while one of k workers is free, then b per request."""
+
+    def test_k1_is_the_linear_model(self):
+        import random
+        rng = random.Random(5)
+        samples = [(rng.randrange(8), rng.uniform(1.0, 40.0)) for _ in range(500)]
+        for kw in (dict(lam=1.0), dict(lam=4.0, floor=0.25)):
+            lin, p1 = LinearDelay(smooth=1000.0, **kw), PeerState(0)
+            hin, p2 = HingeDelay(k=1, smooth=1000.0, **kw), PeerState(1)
+            feed(lin, p1, samples)
+            feed(hin, p2, samples)
+            for x, y in zip(lin.coef(p1), hin.coef(p2)):
+                self.assertAlmostEqual(x, y, places=9, msg=str(kw))
+            p1.conns = p2.conns = 3
+            self.assertAlmostEqual(lin.predict(p1, 10.0), hin.predict(p2, 10.0), places=9)
+
+    def test_recovers_a_hinge(self):
+        # 4 workers of 8 ms: 8 ms while a worker is free, then +2 ms per request queued
+        bal, p = HingeDelay(k=4, smooth=1000.0, lam=1e-9), PeerState(0)
+        feed(bal, p, [(n, 8.0 + 2.0 * max(0, n + 1 - 4)) for n in list(range(10)) * 50])
+        a, b = bal.coef(p)
+        self.assertAlmostEqual(a, 8.0, places=4)
+        self.assertAlmostEqual(b, 2.0, places=4)
+        p.conns = 2
+        self.assertAlmostEqual(bal.predict(p, 10.0), 8.0, places=4)
+        p.conns = 6
+        self.assertAlmostEqual(bal.predict(p, 10.0), 8.0 + 2.0 * 3, places=4)
+
+    def test_prior_without_variance_is_a_k_worker_server(self):
+        # no variance: b = mean(rt) / (k + mean(x)), i.e. rt = b * (k + x)
+        bal, p = HingeDelay(k=4, smooth=1000.0, lam=1.0), PeerState(0)
+        feed(bal, p, [(5, 12.0)] * 100)                     # x = 5 + 1 - 4 = 2
+        a, b = bal.coef(p)
+        self.assertAlmostEqual(b, 12.0 / (4 + 2), places=6)
+        self.assertAlmostEqual(a, 4 * b, places=6)
+
+    def test_learns_the_knee(self):
+        import random
+        rng = random.Random(7)
+        for k in (1, 4, 8):
+            bal, p = HingeDelay(k="learn", smooth=1000.0, lam=1e-3), PeerState(0)
+            ns = [rng.randrange(20) for _ in range(2000)]
+            feed(bal, p, [(n, 8.0 + 8.0 / k * max(0, n + 1 - k) + rng.gauss(0, 0.5)) for n in ns])
+            self.assertEqual(bal.knee(p), k)
+
+    def test_flat_data_learns_k1(self):
+        # no sign of a knee (rt does not depend on n): fall back to k = 1, the linear model
+        bal, p = HingeDelay(k="learn", smooth=1000.0, lam=1.0), PeerState(0)
+        feed(bal, p, [(n, 10.0) for n in list(range(3)) * 50])
+        self.assertEqual(bal.knee(p), 1)
+
+    def test_configured_knee_is_the_backend_worker_count(self):
+        # k="oracle" stands for a per-server setting: the backend's number of workers
+        from lbsim import Backend
+
+        class FakeSim:
+            backends = [Backend(0, 4, 1.0)]
+        bal, p = HingeDelay(k="oracle"), PeerState(0)
+        r = Request(0, 0.0, 0, 1.0)
+        r.dispatch = 0.0
+        bal.on_dispatch(FakeSim(), p, r, 0.0)
+        self.assertEqual(bal.knee(p), 4)
+
+    def test_floor_is_relative_to_a_over_k(self):
+        # response time falling with n (overload on a CPU-sharing server): b >= floor * a / k
+        bal, p = HingeDelay(k=4, smooth=1000.0, lam=1e-9, floor=0.5), PeerState(0)
+        feed(bal, p, [(n, 60.0 - 3.0 * n) for n in list(range(12)) * 20])
+        a, b = bal.coef(p)
+        self.assertGreater(a, 0.0)
+        self.assertAlmostEqual(b, 0.5 * a / 4, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

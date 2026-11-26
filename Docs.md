@@ -30,8 +30,8 @@ Explorations, opened inside this fork against `least-time-work` (not sent to ngi
 | PR | branch | verdict |
 | --- | --- | --- |
 | [#1](https://github.com/psygo/nginx_plus/pull/1): worker processes with and without `zone` | `explore/zone-workers` | docs note drafted (local nginx.org branch) |
-| [#2](https://github.com/psygo/nginx_plus/pull/2): learn how response time grows with load | `explore/speed-estimator` | candidate: −8.2 % p99 vs PR 2 after fixing a slope collapse; worst +18 % |
-| [#3](https://github.com/psygo/nginx_plus/pull/3): routing by request cost | `explore/cost-routing` | promising, needs a way to get cost hints |
+| [#2](https://github.com/psygo/nginx_plus/pull/2): learn how response time grows with load | `explore/speed-estimator` | candidate: −9.5 % p99 vs PR 2 (hinge, configured worker count); worst +15 % |
+| [#3](https://github.com/psygo/nginx_plus/pull/3): routing by request cost, learned from response times | `explore/cost-routing` | strongest candidate: −15 to −50 % p99 vs PR 2 with no cost hint; worst −8 % |
 | [#4](https://github.com/psygo/nginx_plus/pull/4): admission control and queueing | `explore/admission-control` | existing features; docs note at most |
 | [#5](https://github.com/psygo/nginx_plus/pull/5): learning-augmented balancing with a floor | `explore/learning-augmented` | research only |
 | [#6](https://github.com/psygo/nginx_plus/pull/6): unbiased `smooth=` weighting | `explore/smooth-weighting` | rejected; PR 2 unchanged |
@@ -43,6 +43,7 @@ Explorations, opened inside this fork against `least-time-work` (not sent to ngi
 - [results/rejected_ideas.md](results/rejected_ideas.md): ideas that were tried and not proposed (power of two choices, a service-rate rule, smaller tweaks), with data and reasons.
 - [results/linux_pr.md](results/linux_pr.md): real nginx on Linux, 18 configurations × 6 variants × 5 paired repetitions, with a simulator-vs-real comparison.
 - [pr/PR1.md](pr/PR1.md), [pr/PR2.md](pr/PR2.md): pull request descriptions; [pr/](pr/) also holds the commit messages.
+- [results/figs/](results/figs/): charts for the pull requests, each in a light and a dark version (PNG for GitHub, SVG source), drawn by `sim/charts.py` from stored results: `python3 sim/figs_pr.py` for PR 1 and PR 2; each exploration branch has a `figs` command for its own.
 - [PLAN.md](PLAN.md): working notes, with the earlier hypotheses (H1 to H6) and prototype measurements.
 
 ## Layout

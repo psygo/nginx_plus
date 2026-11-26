@@ -69,3 +69,19 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | First macOS bimodal A/B (3 seeds) | Overlapped other jobs on the machine; too noisy to use. | 8-seed rerun on an idle machine (`fp_bimodal_real.jsonl`) |
 | Plain `time.Sleep` pacing in the Docker VM | Timer wake-ups 0.3 to 3.5 ms late, which distorts millisecond-scale latencies. | sleep until 2 ms before, then spin |
 | Busy "spinner" threads at idle priority to keep CPUs awake | Made the tail worse through contention on the host. | removed |
+
+## 5. An unbiased `smooth` weighting
+
+**Idea.** Patch 3 weights each response by the time since the server's previous response. On a busy server that gap is roughly the response's own service time, so slow responses count more and the average is biased upward: +14 % on slow3's busy 20 ms server and +36 to +41 % on its moderately used 60 ms one (`sim/explore/test_smooth_weighting.py`). Two weightings without the bias were tried: the time since the previous *dispatch* to the server, and the server's *typical* gap (an average of earlier gaps, independent of the sample being weighted). Both pass the bias tests.
+
+**Result.** Neither improves p99 (`results/smooth_weighting.md`, 18 scenarios × 4 loads × 10 seeds):
+
+| comparison | geometric mean | worst cell |
+| --- | --- | --- |
+| dispatch-gap vs patch 3, smooth=3s | +1.9 % | +11 % (fast3_c4@0.5) |
+| typical-gap vs patch 3, smooth=3s | +0.8 % | +10 % (fast3_c4@0.7) |
+| typical-gap vs patch 3, smooth=10s | +0.4 % | +6 % (fast3_c4@0.5) |
+
+**Likely why (not tested separately).** The bias overestimates slower servers, and overestimating them is a cautious mistake for the tail: it sends them slightly less traffic, which is what the p99 wants. An accurate mean is not the goal; a good routing decision is.
+
+**What would change the verdict.** A workload where the bias makes a fast server look slow (for example a server whose response times vary widely with load), or a use of the average outside routing (reporting), where accuracy matters. Patch 3 stays as it is.

@@ -21,6 +21,8 @@ A sample moves the average only if `|v - avg| * 0.05 >= 0.5`, that is, if it dif
 
 For example, with avg = 10 and every new response taking 2 ms: `0.5 + 2 * 0.05 + 10 * 0.95 = 10.1`, truncated to 10, indefinitely.
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_averages-dark.png"><img alt="least_time's average for a server answering in about 2 ms: the integer average climbs to 10 ms and stays there, the fixed-point average tracks the actual 2.1 ms" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_averages-light.png"></picture>
+
 This shows in a running nginx: with debug logging of the average added to `ngx_http_upstream_least_time_eta()`, two backends answering in about 4.7 ms both show `header_time = 10` on every selection. With this change the logged averages track 4.7 ms.
 
 ## Solution
@@ -32,6 +34,8 @@ Averages are kept in 1/64 ms units. `ngx_http_upstream_least_time_eta()` (and th
 With the default 20 ms clustering the error is mostly hidden, and this change is neutral: in a simulation of 12 scenarios × 4 load levels (20 paired seeds × 300,000 requests each), p99 changes by -2 % to +2 % compared with the current code. On real nginx (Linux, `-O2`, 16 single-worker and 2 four-worker `zone` configurations, 5 paired repetitions each) p99 changes by -4 % to +4 %, and only one 95 % interval excludes zero (-4 % [-7, -2], with slow servers).
 
 It matters as soon as the clustering is finer than the error. A follow-up pull request adds `least_time ... bucket=5ms`. With integer averages a 5 ms bucket gains almost nothing, because the 10 ms error dominates; with fixed-point averages it does what it should:
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_bucket-dark.png"><img alt="p99 change vs stock least_time with bucket=5ms: -3 to -5 % with integer averages, -9 to -42 % with this change" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_bucket-light.png"></picture>
 
 | scenario (simulated, 70 % load unless noted) | bucket=5ms, integer averages | bucket=5ms, this change |
 | --- | --- | --- |

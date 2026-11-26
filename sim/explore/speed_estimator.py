@@ -30,8 +30,24 @@ Samples are weighted as in the "smooth" patch: w = min(1, max(wmin, dt/smooth)).
 Idle servers are made attractive again by halving the prediction per
 fail_timeout + 1 seconds without a request, as nginx does with response times.
 
-  python3 sim/explore/speed_estimator.py tune      # parameter sweep, 5 seeds x 100k
-  python3 sim/explore/speed_estimator.py full      # full matrix, 10 seeds x 200k
+The slope can collapse. On a CPU-sharing server in overload, a request sent while
+the server has few connections sits through the flood that follows, while one sent
+at the peak sees the server drain: response time *falls* with the connections seen
+at dispatch, the fitted slope clamps to 0, the prediction no longer depends on
+connections, and every request goes to one server at a time while the others sit
+idle with stale estimates. The backlog never drains (round 1 of the full matrix:
++642 % on slowdown_ps at 85 % load, runaways on hetero8_ps and fast3_ps at 95 %).
+Two fixes are compared:
+
+  floor      b >= floor * a, keeping the fitted mean (a + b * mean(n) = mean(rt)),
+             so connections always count; floor <= 1/c keeps a c-worker line learnable
+  regressor  "avg": n is the time-average number of other requests in progress over
+             the request's life instead of the count at dispatch
+
+  python3 sim/explore/speed_estimator.py tune      # round 1 sweep, 5 seeds x 100k
+  python3 sim/explore/speed_estimator.py full      # round 1 full matrix, 10 seeds x 200k
+  python3 sim/explore/speed_estimator.py tune2     # round 2: the fixes, adds 95 % load
+  python3 sim/explore/speed_estimator.py full2     # round 2 choice on the full matrix
   python3 sim/explore/speed_estimator.py report    # results/speed_estimator.md
 """
 import os
@@ -47,22 +63,36 @@ FT_MS = 10_000                    # fail_timeout default, 10 s
 
 class LinearDelay(RoundRobin):
     def __init__(self, smooth=3000.0, wmin=0.01, lam=1.0, tol=0.0, decay=True,
-                 weighting="completion"):
+                 weighting="completion", floor=0.0, regressor="dispatch"):
         """weighting: the sample weight comes from the time since this server's previous
         "completion" (as patches/0003 does; biased toward slow requests on busy servers)
-        or since its previous "dispatch" before this request was sent (unbiased)."""
+        or since its previous "dispatch" before this request was sent (unbiased).
+
+        floor: lower bound on the slope as a fraction of the intercept, b >= floor * a, so
+        connections always count. Without it the slope can collapse to 0 in overload.
+
+        regressor: n is the number of other requests in progress at "dispatch", or their
+        time "avg" over the request's life (what a CPU-sharing server's speed depends on)."""
         assert weighting in ("completion", "dispatch")
+        assert regressor in ("dispatch", "avg")
         self.smooth, self.wmin, self.lam, self.tol, self.decay = smooth, wmin, lam, tol, decay
-        self.weighting = weighting
-        self.name = f"linear_delay s={smooth:g} lam={lam:g} tol={tol:g} w={weighting}"
+        self.weighting, self.floor, self.regressor = weighting, floor, regressor
+        self.name = (f"linear_delay s={smooth:g} lam={lam:g} tol={tol:g} w={weighting} "
+                     f"floor={floor:g} n={regressor}")
         self.st = {}
 
     def _s(self, p):
         s = self.st.get(p)
         if s is None:
-            # [m_n, m_r, m_nn, m_nr, last_sample, last_dispatch, samples]
-            s = self.st[p] = [0.0, 0.0, 0.0, 0.0, None, 0.0, 0]
+            # [m_n, m_r, m_nn, m_nr, last_sample, last_dispatch, samples, area, area_t]
+            # area: integral of connections over time, up to area_t
+            s = self.st[p] = [0.0, 0.0, 0.0, 0.0, None, 0.0, 0, 0.0, 0.0]
         return s
+
+    def _area(self, s, p, now):
+        s[7] += p.conns * (now - s[8])
+        s[8] = now
+        return s[7]
 
     def coef(self, p):
         s = self._s(p)
@@ -74,6 +104,10 @@ class LinearDelay(RoundRobin):
         b = (cov + self.lam * mr) / (var + self.lam * (1.0 + mn))
         b = max(0.0, b)
         a = max(0.0, mr - b * mn)
+        if b < self.floor * a:
+            # keep the fitted mean: a + b * mn = mr with b = floor * a
+            a = mr / (1.0 + self.floor * mn)
+            b = self.floor * a
         return a, b
 
     def predict(self, p, now):
@@ -95,18 +129,24 @@ class LinearDelay(RoundRobin):
         return smooth_wrr_among(tied, 0, lambda p: True)
 
     def on_dispatch(self, sim, p, req, now):
+        s = self._s(p)
+        area = self._area(s, p, now)
         req.n_at_dispatch = p.conns
         p.conns += 1
-        s = self._s(p)
-        req.lt_state = now - s[5] if s[6] or s[4] is not None else None   # gap since previous dispatch
+        gap = now - s[5] if s[6] or s[4] is not None else None   # gap since previous dispatch
+        req.lt_state = (gap, area)
         s[5] = now
 
     def on_done(self, sim, p, req, now, rt):
-        p.conns -= 1
         s = self._s(p)
+        area = self._area(s, p, now)
+        p.conns -= 1
+        gap, area0 = getattr(req, "lt_state", None) or (None, None)   # unit tests feed on_done only
         n, r = float(req.n_at_dispatch), float(rt)
+        if self.regressor == "avg" and area0 is not None and now > req.dispatch:
+            n = max(0.0, (area - area0) / (now - req.dispatch) - 1.0)   # others, not this request
         if self.weighting == "dispatch":
-            dt = getattr(req, "lt_state", None)
+            dt = gap
         else:
             dt = None if s[4] is None else now - s[4]
         if s[4] is None or dt is None:
@@ -122,8 +162,14 @@ class LinearDelay(RoundRobin):
         s[3] = k * s[3] + w * n * r
 
 
-def lin_name(smooth, lam, tol=0.0, weighting="completion"):
-    return f"lin_s{int(smooth)}_l{lam:g}_t{tol:g}_{weighting[0]}"
+def lin_name(smooth, lam, tol=0.0, weighting="completion", floor=0.0, regressor="dispatch"):
+    """Names of the first tuning run are unchanged; floor and regressor add suffixes."""
+    name = f"lin_s{int(smooth)}_l{lam:g}_t{tol:g}_{weighting[0]}"
+    if floor:
+        name += f"_f{floor:g}"
+    if regressor == "avg":
+        name += "_avg"
+    return name
 
 
 for _s in (1000, 3000, 10000):
@@ -132,6 +178,14 @@ for _s in (1000, 3000, 10000):
             for _w in ("completion", "dispatch"):
                 register(lin_name(_s, _l, _t, _w),
                          lambda s=_s, l=_l, t=_t, w=_w: LinearDelay(smooth=s, lam=l, tol=t, weighting=w))
+
+# second round: the fixes for the slope collapse (dispatch-gap weighting, tol 0.05)
+FIX_GRID = [(s, l, f, r) for s in (3000, 10000) for l in (1, 4) for f in (0.0, 0.1, 0.25, 0.5)
+            for r in ("dispatch", "avg") if f or r == "avg"]
+for _s, _l, _f, _r in FIX_GRID:
+    register(lin_name(_s, _l, 0.05, "dispatch", _f, _r),
+             lambda s=_s, l=_l, f=_f, r=_r: LinearDelay(smooth=s, lam=l, tol=0.05,
+                                                        weighting="dispatch", floor=f, regressor=r))
 
 PR_SCEN = ["fast3", "slow3", "hetero8", "big16", "lognorm_het", "bimodal4",
            "bimodal4_het", "slowdown", "slowdown_ps", "homog8", "fast3_homog", "lognorm4"]
@@ -155,6 +209,31 @@ def jobs_full(chosen):
             for k in range(1, 11)]
 
 
+ROUND1 = lin_name(10000, 4, 0.05, "dispatch")          # chosen by the first tuning round
+
+
+def jobs_tune2():
+    """Second round, after the slope collapse: adds 95 % load, where it showed up."""
+    bals = BASE + [ROUND1] + [lin_name(s, l, 0.05, "dispatch", f, r) for s, l, f, r in FIX_GRID]
+    return [dict(scenario=sc, util=u, balancer=b, seed=k, n=100_000)
+            for sc in TUNE_SCEN for u in (0.7, 0.85, 0.95) for b in bals for k in range(1, 6)]
+
+
+def jobs_full2(chosen):
+    """Only the new variant; the other balancers' rows are in speed_full.json (same seeds,
+    so the same arrivals and costs: still paired)."""
+    return [dict(scenario=sc, util=u, balancer=chosen, seed=k, n=200_000)
+            for sc in PR_SCEN + ROBUST for u in (0.5, 0.7, 0.85, 0.95) for k in range(1, 11)]
+
+
+def pick2(rows, worst_max=1.15):
+    """Robust choice: best geometric mean among variants whose worst cell is at most +15 %
+    vs p123_b5_s3; if none qualifies, the one with the best worst cell."""
+    ranking = pick(rows)
+    ok = [x for x in ranking if x[1] <= worst_max]
+    return (ok or sorted(ranking, key=lambda x: x[1]))[0][2], ranking
+
+
 def pick(rows):
     """Best linear variant: lowest geometric-mean p99 ratio vs p123_b5_s3, ties to worst case."""
     by = index(rows)
@@ -168,46 +247,71 @@ def pick(rows):
     return out
 
 
+def _tune_table(ranking, top=None):
+    rows = ["| variant | mean | worst |", "| --- | --- | --- |"]
+    for g, w, b in ranking[:top]:
+        rows.append(f"| `{b}` | {(g - 1) * 100:+.1f} % | {(w - 1) * 100:+.0f} % |")
+    return rows
+
+
 def report():
     import math
     md = ["# Exploration #1: learning how response time grows with load", "",
-          "See the docstring of `sim/explore/speed_estimator.py` for the method.", ""]
-    tune = load("speed_tune.json")
-    ranking = pick(tune)
-    md += ["## Tuning (5 seeds × 100,000 requests; 9 scenarios at 70 % and 85 % load)", "",
-           "Geometric mean and worst case of p99 relative to patched least_time "
-           "(`bucket=5ms smooth=3s`). Lower is better.", "",
-           "| variant | mean | worst |", "| --- | --- | --- |"]
-    for g, w, b in ranking:
-        md.append(f"| `{b}` | {(g - 1) * 100:+.1f} % | {(w - 1) * 100:+.0f} % |")
-    md.append("")
-    path = os.path.join(common.RESULTS, "speed_full.json")
-    if os.path.exists(path):
+          "See the docstring of `sim/explore/speed_estimator.py` for the method. All figures "
+          "are p99 relative to patched least_time (`bucket=5ms smooth=3s`); lower is better.", "",
+          "## Tuning, round 1 (5 seeds × 100,000 requests; 9 scenarios at 70 % and 85 % load)", ""]
+    md += _tune_table(pick(load("speed_tune.json"))) + [""]
+    chosen2 = None
+    if os.path.exists(os.path.join(common.RESULTS, "speed_tune2.json")):
+        chosen2, ranking2 = pick2(load("speed_tune2.json"))
+        md += ["## Tuning, round 2: fixes for the slope collapse", "",
+               f"The full matrix of round 1 found `{ROUND1}` diverging on CPU-sharing backends "
+               "near saturation. In overload, a request sent while a server has few "
+               "connections sits through the flood that follows, so response time falls with "
+               "the connections seen at dispatch; the fitted slope clamps to 0, the estimate "
+               "stops depending on connections, and requests herd onto one server at a time "
+               "while the others sit idle with stale estimates. Two fixes: a slope floor "
+               "`b >= floor * a` (`_f<floor>`), and fitting on the average number of "
+               "connections over the request's life (`_avg`). Same 9 scenarios, now also at "
+               "95 % load (5 seeds × 100,000). Chosen: the best mean among variants whose "
+               f"worst cell is at most +15 %: `{chosen2}`.", ""]
+        md += _tune_table(ranking2) + [""]
+    if os.path.exists(os.path.join(common.RESULTS, "speed_full.json")):
         full = load("speed_full.json")
+        if chosen2 and os.path.exists(os.path.join(common.RESULTS, "speed_full2.json")):
+            full = full + load("speed_full2.json")
         by = index(full)
-        chosen = next(b for _, _, b in by if b.startswith("lin_"))
-        md += [f"## Full matrix: `{chosen}` (10 seeds × 200,000 requests)", "",
-               "p99 change vs patched least_time (`p123`, bucket=5ms smooth=3s), "
-               "geometric mean over paired seeds with 95 % CI. "
-               "`sed_true` knows the true server capacities (not implementable); "
-               "`sed` is the rejected service-rate rule.", "",
-               "| scenario | load | stock lt | sed | linear (new) | sed_true | oracle |",
-               "| --- | --- | --- | --- | --- | --- | --- |"]
-        worst, logs = (None, 0), []
+        lins = [ROUND1] + ([chosen2] if chosen2 and any(k[2] == chosen2 for k in by) else [])
+        cols = ["lt", "sed"] + lins + ["sed_true", "oracle"]
+        head = {"lt": "stock lt", "sed": "sed", ROUND1: "linear, round 1",
+                "sed_true": "sed_true", "oracle": "oracle"}
+        if len(lins) > 1:
+            head[lins[1]] = "linear + fix, round 2"
+        md += ["## Full matrix (10 seeds × 200,000 requests)", "",
+               "Geometric mean over paired seeds with 95 % CI. `sed_true` knows the true "
+               "server capacities (not implementable); `sed` is the rejected service-rate "
+               "rule. " + " ".join(f"`{head[b]}` is `{b}`." for b in lins), "",
+               "| scenario | load | " + " | ".join(head[b] for b in cols) + " |",
+               "| --- | --- |" + " --- |" * len(cols)]
+        summ = {b: [] for b in lins}
         for sc in PR_SCEN + ROBUST:
             for u in (0.5, 0.7, 0.85, 0.95):
-                if (sc, u, chosen) not in by:
+                if (sc, u, ROUND1) not in by:
                     continue
                 base = by[(sc, u, "p123_b5_s3")]
-                cells = [fmt(ratio(by[(sc, u, b)], base)) for b in ("lt", "sed", chosen, "sed_true", "oracle")]
-                r = ratio(by[(sc, u, chosen)], base)
-                logs.append(math.log(r[0]))
-                if r[0] > worst[1]:
-                    worst = (f"{sc}@{u}", r[0])
-                md.append(f"| {sc} | {u} | " + " | ".join(cells) + " |")
-        md += ["", f"Geometric mean over all cells: {(math.exp(mean(logs)) - 1) * 100:+.1f} %; "
-               f"worst cell: {worst[0]} {(worst[1] - 1) * 100:+.0f} %.", "",
-               "Robustness scenarios:", ""]
+                md.append(f"| {sc} | {u} | " + " | ".join(
+                    fmt(ratio(by[(sc, u, b)], base)) if (sc, u, b) in by else "" for b in cols) + " |")
+                for b in lins:
+                    if (sc, u, b) in by:
+                        summ[b].append((ratio(by[(sc, u, b)], base)[0], f"{sc}@{u}"))
+        md.append("")
+        for b in lins:
+            rs = summ[b]
+            g = math.exp(mean(math.log(r) for r, _ in rs))
+            lo, hi = min(rs), max(rs)
+            md.append(f"- `{b}`: geometric mean {(g - 1) * 100:+.1f} % over {len(rs)} cells; "
+                      f"best {(lo[0] - 1) * 100:+.0f} % ({lo[1]}), worst {(hi[0] - 1) * 100:+.0f} % ({hi[1]}).")
+        md += ["", "Robustness scenarios:", ""]
         md += [f"- `{k}`: {v}" for k, v in EXTRA_DESC.items()] + [""]
     out = os.path.join(common.RESULTS, "speed_estimator.md")
     with open(out, "w") as f:
@@ -225,6 +329,17 @@ if __name__ == "__main__":
         chosen = sys.argv[2] if len(sys.argv) > 2 else pick(load("speed_tune.json"))[0][2]
         print("full matrix with", chosen)
         run_jobs(jobs_full(chosen), "speed_full.json")
+        report()
+    elif cmd == "tune2":
+        rows = run_jobs(jobs_tune2(), "speed_tune2.json", label="speed_tune2")
+        chosen, ranking = pick2(rows)
+        for g, w, b in ranking[:8]:
+            print(f"{b:34s} mean {(g - 1) * 100:+.1f} %  worst {(w - 1) * 100:+.0f} %")
+        print("chosen:", chosen)
+    elif cmd == "full2":
+        chosen = sys.argv[2] if len(sys.argv) > 2 else pick2(load("speed_tune2.json"))[0]
+        print("full matrix with", chosen)
+        run_jobs(jobs_full2(chosen), "speed_full2.json", label="speed_full2")
         report()
     elif cmd == "report":
         report()

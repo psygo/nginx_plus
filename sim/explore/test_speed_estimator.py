@@ -58,6 +58,71 @@ class TestLinearDelay(unittest.TestCase):
         bal.on_done(None, p, req, s[4] + 5000.0, 40.0)
         self.assertAlmostEqual(bal.coef(p)[0], 40.0, places=6)
 
+    def test_slope_floor_keeps_connections_in_the_estimate(self):
+        # On a CPU-sharing server in overload, response time can *fall* with the connections
+        # seen at dispatch (requests sent early sit through the flood that follows). The
+        # fitted slope then clamps to 0, the estimate stops depending on connections, and
+        # every request goes to one server (results/speed_estimator.md, slowdown_ps).
+        samples = [(n, 50.0 - 5.0 * n) for n in list(range(9)) * 20]
+        bal, p = LinearDelay(smooth=1000.0, lam=1e-9), PeerState(0)
+        feed(bal, p, samples)
+        self.assertEqual(bal.coef(p)[1], 0.0)                 # the defect
+        bal, p = LinearDelay(smooth=1000.0, lam=1e-9, floor=0.25), PeerState(0)
+        feed(bal, p, samples)
+        a, b = bal.coef(p)
+        self.assertGreater(a, 0.0)
+        self.assertAlmostEqual(b, 0.25 * a, places=6)
+        mean_n, mean_rt = bal._s(p)[0], bal._s(p)[1]          # the estimator's weighted means
+        self.assertAlmostEqual(a + b * mean_n, mean_rt, places=6)   # still fits the mean
+
+    def test_slope_floor_leaves_a_multiworker_line_alone(self):
+        # 4 workers: rt ~ S + S/4 * n, so b = a/4 must stay learnable with floor 0.2
+        bal, p = LinearDelay(smooth=1000.0, lam=1e-9, floor=0.2), PeerState(0)
+        feed(bal, p, [(n, 8.0 + 2.0 * n) for n in list(range(10)) * 50])
+        a, b = bal.coef(p)
+        self.assertAlmostEqual(a, 8.0, places=4)
+        self.assertAlmostEqual(b, 2.0, places=4)
+
+    def test_average_load_regressor(self):
+        # A is sent to an empty server at t=0; B at t=10, C at t=20; A completes at t=30.
+        # Other requests in progress during A's life: 0, then 1, then 2, 10 ms each, so the
+        # average is 1.0, while the count at dispatch is 0.
+        for regressor, expected in (("dispatch", 0.0), ("avg", 1.0)):
+            bal, p = LinearDelay(smooth=1000.0, lam=1e-9, regressor=regressor), PeerState(0)
+            reqs = [Request(i, t, 0, 1.0) for i, t in enumerate((0.0, 10.0, 20.0))]
+            for r in reqs:
+                r.dispatch = r.arrival
+                bal.on_dispatch(None, p, r, r.arrival)
+            bal.on_done(None, p, reqs[0], 30.0, 30)
+            self.assertAlmostEqual(bal._s(p)[0], expected, places=9, msg=regressor)
+            self.assertEqual(p.conns, 2)
+
+    @staticmethod
+    def late_mean_after_overload(bal, seed, servers=2, workers=1):
+        """CPU-sharing servers at 90 % load; server 0 runs at 1/4 speed from 5 to 8 s, which
+        overloads the group. A balancer that keeps working drains the backlog within about
+        8 s; returns the mean latency of requests sent in the last 10 s of a 30 s run."""
+        import experiments
+        from lbsim import Backend, Sim, exp_workload
+        bks = [Backend(i, workers, 1.0, "ps") for i in range(servers)]
+        wl = exp_workload(10.0)
+        rate = experiments.rate_for(0.9, bks, wl)
+        ev = [(5000.0, lambda s, now: s.backends[0].set_speed(s, 0.25, now)),
+              (8000.0, lambda s, now: s.backends[0].set_speed(s, 1.0, now))]
+        sim = Sim(bks, bal, wl, rate, int(rate * 30), seed=seed, events=ev, warmup=0.0)
+        sim.run()
+        late = [x[1] for x in sim.done if x[0] > 20000.0]
+        return sum(late) / len(late)
+
+    def test_slope_floor_prevents_herding_after_overload(self):
+        kw = dict(smooth=10000.0, lam=4.0, tol=0.05, weighting="dispatch")
+        for seed in (1, 2):
+            # without the floor the slope collapses and requests herd onto one server at a
+            # time; the backlog never drains (seconds of latency 12 s after the overload)
+            self.assertGreater(self.late_mean_after_overload(LinearDelay(**kw), seed), 1000.0)
+            self.assertLess(self.late_mean_after_overload(LinearDelay(floor=0.25, **kw), seed), 100.0)
+        self.assertLess(self.late_mean_after_overload(LinearDelay(floor=0.25, **kw), 1, 4, 4), 50.0)
+
     def test_selects_lowest_prediction_and_decays_idle(self):
         bal = LinearDelay(smooth=1000.0, lam=1e-9)
         fast, slow = PeerState(0), PeerState(1)

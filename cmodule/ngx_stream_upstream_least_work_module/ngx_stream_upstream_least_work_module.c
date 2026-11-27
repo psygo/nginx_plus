@@ -29,7 +29,7 @@
  * and calibrations, work in progress) is allocated there and shared by all
  * worker processes, under the lock that already protects the peers;
  * otherwise it is kept per worker process (like least_conn without zone).
- * It mirrors LeastWorkC in sim/explore/cost_routing.py.
+ * It mirrors LeastWorkC of psygo/nginx_sim (balancers/least_work_c.py).
  */
 
 

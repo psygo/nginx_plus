@@ -15,7 +15,11 @@
 //
 // dist: exp:MEAN | bimodal:A,B,P (exponential with mean B with prob P, else A)
 //
-//	| lognormal:MEDIAN,SIGMA
+//	      | classes:M0,P0,M1,P1,... (route i with probability Pi, exponential
+//	      cost with mean Mi; the request goes to URL "r<i>?c=..." so that nginx
+//	      sees one route per class, and p99 is also reported per class)
+//
+//		| lognormal:MEDIAN,SIGMA
 package main
 
 import (
@@ -36,7 +40,7 @@ import (
 	"time"
 )
 
-type sampler func(r *rand.Rand) float64
+type sampler func(r *rand.Rand) (int, float64) // class (-1: none), cost
 
 // waitUntil sleeps until shortly before t, then spins: on a VM, timer
 // wake-ups arrive up to several ms late, which would add to every measured
@@ -62,6 +66,41 @@ func pick(xs []float64, p float64) float64 {
 }
 
 func parseDist(s string) (sampler, error) {
+	if kind, args, _ := strings.Cut(s, ":"); kind == "classes" {
+		return parseClasses(args)
+	}
+	f, err := parseCost(s)
+	if err != nil {
+		return nil, err
+	}
+	return func(r *rand.Rand) (int, float64) { return -1, f(r) }, nil
+}
+
+func parseClasses(args string) (sampler, error) {
+	var m, p []float64
+	xs := strings.Split(args, ",")
+	if len(xs)%2 != 0 {
+		return nil, fmt.Errorf("classes: need mean,probability pairs")
+	}
+	for i := 0; i < len(xs); i += 2 {
+		a, err1 := strconv.ParseFloat(xs[i], 64)
+		b, err2 := strconv.ParseFloat(xs[i+1], 64)
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("classes: bad number in %q", args)
+		}
+		m = append(m, a)
+		p = append(p, b)
+	}
+	return func(r *rand.Rand) (int, float64) {
+		u, i := r.Float64(), 0
+		for ; i < len(p)-1 && u >= p[i]; i++ {
+			u -= p[i]
+		}
+		return i, r.ExpFloat64() * m[i]
+	}, nil
+}
+
+func parseCost(s string) (func(*rand.Rand) float64, error) {
 	kind, args, _ := strings.Cut(s, ":")
 	var a []float64
 	for _, x := range strings.Split(args, ",") {
@@ -89,11 +128,12 @@ func parseDist(s string) (sampler, error) {
 }
 
 type result struct {
-	at   time.Duration // scheduled time from start
-	lat  float64       // ms
-	lag  float64       // ms between scheduled and actual send
-	port string
-	err  bool
+	class int
+	at    time.Duration // scheduled time from start
+	lat   float64       // ms
+	lag   float64       // ms between scheduled and actual send
+	port  string
+	err   bool
 }
 
 func main() {
@@ -117,8 +157,9 @@ func main() {
 	rng := rand.New(rand.NewSource(*seed))
 
 	type req struct {
-		at   time.Duration
-		cost float64
+		at    time.Duration
+		class int
+		cost  float64
 	}
 	var plan []req
 	for t := 0.0; ; {
@@ -127,7 +168,8 @@ func main() {
 		if at >= total {
 			break
 		}
-		plan = append(plan, req{at, smp(rng)})
+		class, cost := smp(rng)
+		plan = append(plan, req{at, class, cost})
 	}
 
 	tr := &http.Transport{
@@ -149,9 +191,12 @@ func main() {
 			defer wg.Done()
 			sched := start.Add(p.at)
 			u := fmt.Sprintf("%s?c=%.3f", *url, p.cost)
+			if p.class >= 0 {
+				u = fmt.Sprintf("%sr%d?c=%.3f", *url, p.class, p.cost)
+			}
 			lag := float64(time.Since(sched)) / float64(time.Millisecond)
 			resp, err := client.Get(u)
-			res := result{at: p.at, lag: lag}
+			res := result{class: p.class, at: p.at, lag: lag}
 			if err != nil {
 				res.err = true
 			} else {
@@ -168,6 +213,7 @@ func main() {
 
 	summarize := func(from, to time.Duration) map[string]any {
 		var lat, lags []float64
+		byClass := map[int][]float64{}
 		ports := map[string]int{}
 		errs := 0
 		for _, r := range results {
@@ -180,6 +226,9 @@ func main() {
 			}
 			lat = append(lat, r.lat)
 			lags = append(lags, r.lag)
+			if r.class >= 0 {
+				byClass[r.class] = append(byClass[r.class], r.lat)
+			}
 			ports[r.port]++
 		}
 		sort.Float64s(lat)
@@ -202,8 +251,15 @@ func main() {
 		if len(lat) > 0 {
 			mean = sum / float64(len(lat))
 		}
+		classes := map[string]any{}
+		for c, xs := range byClass {
+			sort.Float64s(xs)
+			classes[strconv.Itoa(c)] = map[string]any{
+				"n": len(xs), "p50": pick(xs, 0.5), "p99": pick(xs, 0.99)}
+		}
 		return map[string]any{
-			"n": len(lat), "errors": errs, "mean": mean,
+			"by_class": classes,
+			"n":        len(lat), "errors": errs, "mean": mean,
 			"p50": q(0.5), "p90": q(0.9), "p95": q(0.95), "p99": q(0.99),
 			"p999": q(0.999), "by_port": ports,
 			"send_lag_p50": pick(lags, 0.5), "send_lag_p99": pick(lags, 0.99),

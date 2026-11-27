@@ -39,7 +39,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common                                          # noqa: E402
 from common import add_scenarios, mean, ratio, fmt, register, run_jobs_ext  # noqa: E402
-from lbsim import Backend, LeastWork, RoundRobin       # noqa: E402
+from lbsim import Backend, LeastWork, RoundRobin, smooth_wrr_among  # noqa: E402
 
 def _zipf50():
     """50 routes: popularity ~ 1/rank, mean cost log-uniform in 1-200 ms (fixed draw)."""
@@ -171,6 +171,8 @@ class LearnedCost(RoundRobin):
     Per server this needs 5 numbers; per route 1.
     """
 
+    skip_zero = True             # LeastWorkC: zero-ms responses teach too
+
     def __init__(self, alpha=0.02, key="class", cal_alpha=None):
         assert key in ("class", "hint")
         self.alpha, self.key_mode = alpha, key
@@ -226,20 +228,66 @@ class LearnedCost(RoundRobin):
                 self.gnum[i] = self.gden[i] = delay
             self.gnum[i] += a * (rt - self.gnum[i])
             self.gden[i] += a * (delay - self.gden[i])
-        if req.n_at_dispatch or rt <= 0:
+        if req.n_at_dispatch or rt < 0 or (rt == 0 and self.skip_zero):
             return
         a, v = self.alpha, self.speed(p)
         k_old = self.kappa.get(r)
         x = rt * v
         self.kappa[r] = x if k_old is None else k_old + a * (x - k_old)
         self.kappa_all = x if self.kappa_all is None else self.kappa_all + a * (x - self.kappa_all)
-        if k_old is not None:
+        if k_old:                                       # a zero cost says nothing of speed
             if p.idx not in self.den:                   # start at the default speed
                 self.num[p.idx], self.den[p.idx] = k_old, k_old / v
             self.num[p.idx] += a * (k_old - self.num[p.idx])
             self.den[p.idx] += a * (rt - self.den[p.idx])
 
 
+class LeastWorkC(LearnedCost):
+    """LearnedCost exactly as the C prototype computes it
+    (cmodule/ngx_http_upstream_least_work_module): estimates within `tol` ms of the best
+    are ties, broken by smooth weighted round robin as least_conn and least_time do
+    (response times are whole milliseconds, so smaller differences are noise, and without
+    the tolerance one of two equal servers took every request at light load); a server
+    without a speed sample gets the arithmetic mean of the learned speeds (no libm).
+    Zero-millisecond responses teach too (a sub-millisecond server reads 0 ms most of the
+    time, and the difference of two truncated clocks is unbiased), with the averages of
+    time used as at least FLOOR ms so that a speed stays bounded."""
+
+    skip_zero = False
+    FLOOR = 0.5                  # ms: the averages of time are used as at least this
+
+    def __init__(self, alpha=0.02, cal_alpha=0.002, key="class", tol=1.0):
+        super().__init__(alpha=alpha, key=key, cal_alpha=cal_alpha)
+        self.tol = tol
+        self.name = f"least_work (C) tol={tol:g}"
+
+    def _default_speed(self):
+        vs = [self.num[i] / max(self.den[i], self.FLOOR) for i in self.den]
+        return sum(vs) / len(vs) if vs else 1.0
+
+    def speed(self, p):
+        if p.idx in self.den:
+            return self.num[p.idx] / max(self.den[p.idx], self.FLOOR)
+        return self._default_speed()
+
+    def calibration(self, p):
+        if p.idx in self.gden:
+            return max(self.gnum[p.idx], self.FLOOR) / max(self.gden[p.idx], self.FLOOR)
+        return 1.0
+
+    def select(self, sim, peers, req, now):
+        r = self.key(req)
+        es = {p.idx: self.calibration(p) * (self.work.get(p.idx, 0.0) + self.predict(p, r))
+              for p in peers}
+        lim = min(es.values()) + self.tol
+        cand = [i for i, p in enumerate(peers) if es[p.idx] <= lim]
+        if len(cand) == 1:
+            return peers[cand[0]]
+        return smooth_wrr_among(peers, cand[0], lambda p: es[p.idx] <= lim)
+
+
+register("least_work_c", lambda: LeastWorkC())
+register("least_work_c_t0", lambda: LeastWorkC(tol=0.0))
 register("learned_cost", lambda: LearnedCost(alpha=0.02, cal_alpha=0.002))
 register("learned_cost_a05", lambda: LearnedCost(alpha=0.05, cal_alpha=0.002))
 register("learned_cost_hint", lambda: LearnedCost(alpha=0.02, key="hint", cal_alpha=0.002))
@@ -521,6 +569,22 @@ if __name__ == "__main__":
                   for (sc, u, b), v in by.items() if b.endswith("cost" + c) or b.endswith("hint" + c)]
             g = math.exp(mean(math.log(r) for r, _ in rs))
             print(f"cal{c or '_0.02'}: geomean {(g - 1) * 100:+.1f} %, worst {(max(rs)[0] - 1) * 100:+.0f} % ({max(rs)[1]})")
+    elif cmd == "cvariant":
+        J = [dict(scenario=sc, util=u, balancer=b, seed=k, n=200_000)
+             for sc in ROBUST_SCEN for u in UTILS for k in range(1, 11)
+             for b in ("least_work_c", "least_work_c_t0")]
+        rows = run_jobs_ext(J, "cost_c.json", label="cost_c")
+        by = {}
+        for r in rows + common.load("cost_robust.json"):
+            by.setdefault((r["scenario"], r["util"], r["balancer"]), {})[r["seed"]] = r["p99"]
+        for b in ("learned_cost", "least_work_c", "least_work_c_t0"):
+            for k in ("fcfs", "_ps", "_c4", "_mix"):
+                scs = [sc for sc in ROBUST_SCEN
+                       if (sc.endswith(k) if k != "fcfs" else not sc.endswith(("_ps", "_c4", "_mix")))]
+                rs = [(ratio(by[(sc, u, b)], by[(sc, u, "p123_b5_s3")])[0], f"{sc}@{u}")
+                      for sc in scs for u in UTILS]
+                g = math.exp(mean(math.log(r) for r, _ in rs))
+                print(f"{b:16s} {k:5s} geomean {(g - 1) * 100:+.1f} %  worst {(max(rs)[0] - 1) * 100:+.0f} % ({max(rs)[1]})")
     elif cmd == "learned":
         run_jobs_ext(jobs_learned(), "cost_learned.json", label="cost_learned")
         report()

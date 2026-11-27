@@ -39,6 +39,11 @@ SCENARIOS = {
     "bimodal4":     dict(speeds=[1] * 4, dist="bimodal:2,80,0.1"),
     "bimodal4_het": dict(speeds=[2, 1, 1, 0.5], dist="bimodal:2,80,0.1"),
     "homog8":       dict(speeds=[1] * 8, dist="exp:10"),
+    # cost routing (sim/explore/cost_routing.py): one route per request class
+    "cr_bimodal_het4": dict(speeds=[2, 1, 1, 0.5], dist="classes:2,0.9,80,0.1"),
+    "cr_bimodal_het8": dict(speeds=HETERO8, dist="classes:2,0.9,80,0.1"),
+    "cr_api3_het4":    dict(speeds=[2, 1, 1, 0.5], dist="classes:1,0.7,10,0.25,200,0.05"),
+    "cr_api3_het8":    dict(speeds=HETERO8, dist="classes:1,0.7,10,0.25,200,0.05"),
     "slowdown":     dict(speeds=[1] * 4, dist="exp:10", duration=60,
                          slow="25:20:0.25", window="20:40"),
 }
@@ -51,6 +56,7 @@ VARIANTS = {
     "p12_b5":      ("p12", "least_time header bucket=5ms"),
     "p123_b5_s3":  ("p123", "least_time header bucket=5ms smooth=3s"),
     "p13_s3":      ("p123", "least_time header smooth=3s"),
+    "least_work":  ("lw", "least_work key=$uri"),
 }
 
 NGINX_CONF = """
@@ -97,6 +103,8 @@ def mean_cost(dist):
         return (1 - a[2]) * a[0] + a[2] * a[1]
     if kind == "lognormal":
         return a[0] * math.exp(a[1] ** 2 / 2)
+    if kind == "classes":
+        return sum(m * p for m, p in zip(a[0::2], a[1::2]))
     raise ValueError(dist)
 
 

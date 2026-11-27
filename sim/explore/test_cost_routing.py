@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common                                          # noqa: E402
-from cost_routing import SITA, LearnedCost, WORKLOADS, classes_workload  # noqa: E402
+from cost_routing import SITA, LearnedCost, LeastWorkC, WORKLOADS, classes_workload  # noqa: E402
 from lbsim import PeerState, Request                   # noqa: E402
 import experiments                                     # noqa: E402
 from lbsim import Sim                                  # noqa: E402
@@ -65,6 +65,66 @@ def done(bal, p, cls, rt, busy=0, now=0.0):
     bal.on_dispatch(None, p, req, now)
     p.conns -= busy
     bal.on_done(None, p, req, now + rt, rt)
+
+
+class TestLeastWorkC(unittest.TestCase):
+    """LearnedCost as cmodule/ngx_http_upstream_least_work_module computes it."""
+
+    def test_near_ties_round_robin(self):
+        # equal servers whose estimates differ by less than 1 ms (whole-ms response
+        # times make such differences noise): alternate, as least_conn would
+        bal, peers = LeastWorkC(), [PeerState(0), PeerState(1)]
+        for _ in range(50):
+            done(bal, peers[0], 0, 10.0)
+            done(bal, peers[1], 0, 10.4)
+        picks = [bal.select(None, peers, Request(i, 0.0, 0, 1.0), 0.0).idx for i in range(10)]
+        self.assertEqual(picks.count(0), 5)
+
+    def test_a_real_difference_still_wins(self):
+        bal, peers = LeastWorkC(), [PeerState(0), PeerState(1)]
+        for _ in range(300):
+            done(bal, peers[0], 0, 10.0)
+            done(bal, peers[1], 0, 30.0)
+        picks = [bal.select(None, peers, Request(i, 0.0, 0, 1.0), 0.0).idx for i in range(10)]
+        self.assertEqual(picks, [0] * 10)
+
+    def test_zero_ms_responses_teach(self):
+        # nginx measures whole milliseconds: a sub-millisecond server reads 0 ms most of
+        # the time. Its zeros are valid samples (the difference of two truncated clocks is
+        # unbiased); skipping them left a fast server at the default speed.
+        bal, peers = LeastWorkC(alpha=0.05), [PeerState(0), PeerState(1)]
+        for i in range(400):
+            done(bal, peers[0], 0, 200.0)
+            done(bal, peers[1], 0, 0.0)                     # always under 1 ms
+        self.assertGreater(bal.speed(peers[1]) / bal.speed(peers[0]), 20.0)
+        picks = [bal.select(None, peers, Request(i, 0.0, 0, 1.0), 0.0).idx for i in range(10)]
+        self.assertEqual(picks, [1] * 10)
+
+    def test_speed_is_bounded_by_a_half_millisecond_floor(self):
+        # all-zero samples must not make a speed (and the mean default) unbounded
+        bal, peers = LeastWorkC(alpha=0.05), [PeerState(0), PeerState(1)]
+        for _ in range(2000):
+            done(bal, peers[0], 0, 10.0)
+            done(bal, peers[1], 0, 0.0)
+        self.assertLessEqual(bal.speed(peers[1]), bal.num[1] / 0.5 + 1e-9)
+
+    def test_a_zero_cost_route_does_not_zero_a_speed(self):
+        # a route that always reads 0 ms learns cost 0, which says nothing about speed
+        bal, peers = LeastWorkC(alpha=0.05), [PeerState(0), PeerState(1)]
+        for _ in range(50):
+            done(bal, peers[0], 0, 0.0)
+            done(bal, peers[1], 0, 0.0)
+        for p in peers:
+            self.assertGreater(bal.speed(p), 0.0)
+        bal.select(None, peers, Request(0, 0.0, 0, 1.0), 0.0)
+
+    def test_unlearned_server_gets_the_arithmetic_mean_speed(self):
+        bal, peers = LeastWorkC(alpha=0.05), [PeerState(i) for i in range(3)]
+        for _ in range(500):
+            done(bal, peers[0], 0, 5.0)
+            done(bal, peers[1], 0, 20.0)
+        v0, v1 = bal.speed(peers[0]), bal.speed(peers[1])
+        self.assertAlmostEqual(bal.speed(peers[2]), (v0 + v1) / 2, places=9)
 
 
 class TestRobustScenarios(unittest.TestCase):

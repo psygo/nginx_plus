@@ -46,7 +46,7 @@ Six `explore/*` branches, each with code, tests, results and report, have PRs in
 | --- | --- | --- |
 | [#1](https://github.com/psygo/nginx_plus/pull/1) | `explore/zone-workers` | Without `zone`, 4 workers cost least_conn +16…36 % and patched least_time +11…20 % p99 on real nginx; the sim agrees. Docs note drafted locally on an nginx.org branch (`zone-workers-note`). |
 | [#2](https://github.com/psygo/nginx_plus/pull/2) | `explore/speed-estimator` | Learning how response time grows with load. Round 1 diverged (slope collapse on CPU-sharing backends, +642 %); a slope floor plus fitting on the average load fixed it (−8.2 %), and a hinge with a configured worker count gives −9.5 % p99 vs PR 2 over 72 cells, worst +15 % (slowdown_ps@0.7). Candidate; open: losses on CPU-sharing backends at moderate load, C state (~7 fields), real-nginx check. |
-| [#3](https://github.com/psygo/nginx_plus/pull/3) | `explore/cost-routing` | Least outstanding work with route costs and server speeds learned from response times, no hint: −15 to −50 % p99 vs PR 2 by kind of backend (told the exact costs: −17 to −49 %), worst cell −8 %, robust to wrong route keys. The strongest candidate; needs a route key in nginx (`key=$uri`), a shared route table, and a C prototype. |
+| [#3](https://github.com/psygo/nginx_plus/pull/3) | `explore/cost-routing` | Least outstanding work with route costs and server speeds learned from response times, no hint: −15 to −50 % p99 vs PR 2 by kind of backend (told the exact costs: −17 to −49 %), worst cell −8 %, robust to wrong route keys. C prototype (external module `least_work key=$uri`, tests pass) confirmed on real nginx: −25 to −54 % p99 vs PR 2 in all 8 Linux cells (geometric mean −38 %), the simulator's prediction inside every interval. The strongest candidate; still needs a zone (shared route table and speeds), the stream module, and a decision between a new balancer and `least_time key=`. |
 | [#4](https://github.com/psygo/nginx_plus/pull/4) | `explore/admission-control` | `max_conns` / `queue` cut the tail a lot, but this is existing (or NGINX Plus) functionality, so at most a docs note. |
 | [#5](https://github.com/psygo/nginx_plus/pull/5) | `explore/learning-augmented` | A least_time shortlist bounds damage (+43 % worst vs +1625 % without), per decision rather than per outcome; eps 0.25 trades −16 %/+16 %. Research only. |
 | [#6](https://github.com/psygo/nginx_plus/pull/6) | `explore/smooth-weighting` | Unbiased `smooth=` weightings give no better p99 (+0.4…+1.9 %), so PR 2 stays unchanged. Rejected (`rejected_ideas.md` §5). |
@@ -66,7 +66,7 @@ Six `explore/*` branches, each with code, tests, results and report, have PRs in
 | H3 SED / service rate | **Rejected as a default.** | Helps FCFS backends (-15 to -22 % vs lt), hurts processor sharing (104 vs 85 at 0.7) and equal servers with mixed requests. Peak EWMA is about equal to lt with bucket 1. Details: `results/rejected_ideas.md`. |
 | H4 EWMA | **Confirmed**, as alpha/tau. | Stock lt is worse than lc on bimodal traffic (sim 317 vs 268, real 307 vs 277). A smaller bucket makes it worse (360) because EWMA noise becomes visible. alpha 0.01 with a 3 s time floor fixes it (286) and keeps the gains. |
 | H5 random two least_time | **Rejected on latency.** | big64 at 0.7: 75 vs 41 for full least_time. CPU and lock contention are not modeled; revisit only if lock contention shows up on Linux. Details: `results/rejected_ideas.md`. |
-| H6 least_work | **Promising, out of tree.** | Bimodal heterogeneous: about −40 % p99 vs lc and lt with learned per-class cost; about −30 % at σ=0.5 estimation error. It needs cost hints, so it belongs in a dynamic module. |
+| H6 least_work | **Confirmed on real nginx, without hints.** | Costs per route and speeds per server are learned from response times, so no cost hint is needed (exploration #3). Real nginx, prototype module: −25 to −54 % p99 vs PR 2 (`results/least_work_real.md` on `explore/cost-routing`). |
 
 ### Staged-patch simulation (p99 ms, 5 seeds, ±95 % CI in `results/sim_staged.json`)
 
@@ -136,7 +136,7 @@ This also matches the simulator:
 
 1. Open an upstream issue with the dead-band analysis, the traces and the staged tables; ask which interface they prefer for P2 and P3. Then send P1 (smallest, pure fix) first.
 2. Linux host: re-run H2 (workers with `reuseport`) and the real A/B at higher rates with optimized builds. All macOS numbers here come from `-O0` debug builds and Python backends.
-3. `least_work` dynamic module (H6).
+3. `least_work` (H6): prototype done and confirmed on real nginx (fork PR #3); next a zone and the stream module.
 4. Documentation PR (nginx.org) for `zone` with multiple workers.
 
 ## 1. What the code actually does

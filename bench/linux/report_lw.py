@@ -1,7 +1,7 @@
 """Report for bench/linux/lw_matrix.sh: the least_work prototype on real nginx.
 
-Reads results/linux_lw.jsonl (and results/cost_c.json, results/cost_robust.json for the
-simulator's prediction of the same cells), writes results/least_work_real.md and
+Reads results/linux_lw.jsonl (and nginx_sim's research/results/cost_c.json and
+cost_robust.json for the simulator's prediction of the same cells), writes results/least_work_real.md and
 results/figs/least_work_real-{light,dark}.png.
 
 Ratios are paired by repetition (same arrivals, routes and costs).
@@ -23,8 +23,11 @@ SCEN = {"cr_bimodal_het4": "4 servers 2,1,1,½; 90 % 2 ms / 10 % 80 ms",
         "cr_api3_het4": "4 servers 2,1,1,½; 70 % 1 ms / 25 % 10 ms / 5 % 200 ms",
         "cr_api3_het8": "8 servers 2,2,1,1,1,1,½,½; 70 % 1 / 25 % 10 / 5 % 200 ms"}
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nginx_sim_path                                  # noqa: E402  (puts nginx_sim on sys.path)
+from nginx_sim.stats import fmt_ratio, paired_ratio    # noqa: E402,F401
 from run import SCENARIOS                              # noqa: E402
-T975 = {2: 12.706, 3: 4.303, 4: 3.182, 5: 2.776, 6: 2.571, 7: 2.447, 8: 2.365, 9: 2.306, 10: 2.262}
+
+SIM_RES = nginx_sim_path.RESULTS                       # the simulator's results
 
 
 def disturbed(rows, key):
@@ -35,26 +38,6 @@ def disturbed(rows, key):
         cells.setdefault(key(r), []).append(r["send_lag_p99"])
     med = {k: statistics.median(v) for k, v in cells.items()}
     return [r for r in rows if r["send_lag_p99"] > 2.0 and r["send_lag_p99"] > 3 * med[key(r)]]
-
-
-def ratio(a, b):
-    """Geometric-mean ratio a/b over common repetitions, 95 % CI: (g, lo, hi)."""
-    reps = sorted(set(a) & set(b))
-    logs = [math.log(a[k] / b[k]) for k in reps]
-    n = len(logs)
-    m = sum(logs) / n
-    if n < 2:
-        return math.exp(m), float("nan"), float("nan")
-    sd = math.sqrt(sum((x - m) ** 2 for x in logs) / (n - 1))
-    h = T975.get(n, 1.96) * sd / math.sqrt(n)
-    return math.exp(m), math.exp(m - h), math.exp(m + h)
-
-
-def fmt(r):
-    g, lo, hi = r
-    if math.isnan(lo):
-        return f"{(g - 1) * 100:+.0f} %"
-    return f"{(g - 1) * 100:+.0f} % [{(lo - 1) * 100:+.0f}, {(hi - 1) * 100:+.0f}]"
 
 
 def load():
@@ -68,14 +51,14 @@ def sim_prediction():
     """least_work_c vs p123_b5_s3 in the simulator, same scenario and load."""
     by = {}
     for f in ("cost_c.json", "cost_robust.json"):
-        p = os.path.join(RES, f)
+        p = os.path.join(SIM_RES, f)
         if os.path.exists(p):
             for r in json.load(open(p)):
                 by.setdefault((r["scenario"], r["util"], r["balancer"]), {})[r["seed"]] = r["p99"]
     out = {}
     for (sc, u, b) in list(by):
         if b == "least_work_c" and (sc, u, "p123_b5_s3") in by:
-            out[(sc, u)] = ratio(by[(sc, u, b)], by[(sc, u, "p123_b5_s3")])
+            out[(sc, u)] = paired_ratio(by[(sc, u, b)], by[(sc, u, "p123_b5_s3")])
     return out
 
 
@@ -137,9 +120,9 @@ def main():
         lw = by.get((sc, u, "least_work"))
         if not lw:
             continue
-        cols = [fmt(ratio(lw, by[(sc, u, b)])) if (sc, u, b) in by else ""
+        cols = [fmt_ratio(paired_ratio(lw, by[(sc, u, b)])) if (sc, u, b) in by else ""
                 for b in ("p123_b5_s3", "lt", "least_conn")]
-        cols.append(fmt(sim[(sc, u)]) if (sc, u) in sim else "")
+        cols.append(fmt_ratio(sim[(sc, u)]) if (sc, u) in sim else "")
         md.append(f"| {sc[3:]} | {u} | " + " | ".join(cols) + " |")
     cls_r = []
     md += ["", "## p99 by request class: least_work vs PR 2", "",
@@ -148,9 +131,9 @@ def main():
         cs = sorted({k[3] for k in cls if k[0] == sc and k[1] == u}, key=int)
         if not cs or (sc, u, "least_work", cs[0]) not in cls:
             continue
-        a = ratio(cls[(sc, u, "least_work", cs[0])], cls[(sc, u, "p123_b5_s3", cs[0])])
-        b = ratio(cls[(sc, u, "least_work", cs[-1])], cls[(sc, u, "p123_b5_s3", cs[-1])])
-        md.append(f"| {sc[3:]} | {u} | {fmt(a)} | {fmt(b)} |")
+        a = paired_ratio(cls[(sc, u, "least_work", cs[0])], cls[(sc, u, "p123_b5_s3", cs[0])])
+        b = paired_ratio(cls[(sc, u, "least_work", cs[-1])], cls[(sc, u, "p123_b5_s3", cs[-1])])
+        md.append(f"| {sc[3:]} | {u} | {fmt_ratio(a)} | {fmt_ratio(b)} |")
         cls_r.append(((a[0] - 1) * 100, (b[0] - 1) * 100))
     md += ["", "## Absolute p99 (ms, mean over repetitions)", "",
            "| scenario | load | " + " | ".join(LABEL.values()) + " |",
@@ -159,7 +142,7 @@ def main():
         md.append(f"| {sc[3:]} | {u} | " + " | ".join(
             f"{sum(by[(sc, u, v)].values()) / len(by[(sc, u, v)]):.0f}" if (sc, u, v) in by else ""
             for v in LABEL) + " |")
-    sp = os.path.join(RES, "cost_split.json")
+    sp = os.path.join(SIM_RES, "cost_split.json")
     if os.path.exists(sp):
         real_sh, sim_sh = server_share(rows, json.load(open(sp)))
         md += ["", "## Where requests go: share of all requests on the fastest / slowest servers", "",
@@ -197,7 +180,7 @@ def main():
     md += ["", "Scenarios:", ""] + [f"- `{k[3:]}`: {v}" for k, v in SCEN.items()] + [""]
     cheap = (min(x[0] for x in cls_r), max(x[0] for x in cls_r))
     costly = (min(x[1] for x in cls_r), max(x[1] for x in cls_r))
-    rs = [ratio(by[(sc, u, "least_work")], by[(sc, u, "p123_b5_s3")]) for sc, u in cells
+    rs = [paired_ratio(by[(sc, u, "least_work")], by[(sc, u, "p123_b5_s3")]) for sc, u in cells
           if (sc, u, "least_work") in by and (sc, u, "p123_b5_s3") in by]
     gm = math.exp(sum(math.log(r[0]) for r in rs) / len(rs))
     sig = sum(1 for r in rs if r[2] < 1)
@@ -216,13 +199,12 @@ def main():
         f.write("\n".join(md))
     print(out)
 
-    sys.path.insert(0, os.path.join(ROOT, "sim"))
-    import charts
+    from nginx_sim import charts
     real, pred, cats = [], [], []
     for sc, u in cells:
         if (sc, u, "least_work") in by and (sc, u, "p123_b5_s3") in by:
             cats.append(f"{sc[3:]} · {int(u * 100)} %")
-            real.append((ratio(by[(sc, u, "least_work")], by[(sc, u, "p123_b5_s3")])[0] - 1) * 100)
+            real.append((paired_ratio(by[(sc, u, "least_work")], by[(sc, u, "p123_b5_s3")])[0] - 1) * 100)
             pred.append((sim[(sc, u)][0] - 1) * 100 if (sc, u) in sim else 0.0)
 
     def fig(t):

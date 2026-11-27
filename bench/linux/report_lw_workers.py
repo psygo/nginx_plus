@@ -1,7 +1,7 @@
 """Report for bench/linux/lw_workers_matrix.sh: least_work with 4 worker processes.
 
-Reads results/linux_lw_workers.jsonl (and results/cost_workers4.json for the simulator's
-prediction of the same cells), writes results/least_work_workers.md and
+Reads results/linux_lw_workers.jsonl (and nginx_sim's research/results/cost_workers4.json
+for the simulator's prediction of the same cells), writes results/least_work_workers.md and
 results/figs/least_work_workers-{light,dark}.png.
 
 Every configuration is compared with PR 2's least_time behind a zone, the configuration
@@ -16,7 +16,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from report_lw import RES, ROOT, SCEN, disturbed, fmt, ratio  # noqa: E402
+import nginx_sim_path  # noqa: E402
+from report_lw import RES, SCEN, disturbed  # noqa: E402
+from nginx_sim.stats import fmt_ratio, paired_ratio  # noqa: E402
 
 REF = ("p123_b5_s3", True)
 # (variant, zone) on real nginx, (balancer, shared) in the simulator, label
@@ -58,18 +60,18 @@ def main():
     cells = sorted({(k[0], k[1]) for k in by}, key=lambda c: (list(SCEN).index(c[0]), c[1]))
 
     sim = {}
-    p = os.path.join(RES, "cost_workers4.json")
+    p = os.path.join(nginx_sim_path.RESULTS, "cost_workers4.json")
     for r in (json.load(open(p)) if os.path.exists(p) else []):
         if (r["scenario"], r["util"]) in cells:
             sim.setdefault((r["scenario"], r["util"], r["balancer"], r["shared"]), {})[r["seed"]] = r["p99"]
 
     def real_r(c, cfg):
         a, b = by.get(c + cfg), by.get(c + REF)
-        return ratio(a, b) if a and b else None
+        return paired_ratio(a, b) if a and b else None
 
     def sim_r(c, cfg):
         a, b = sim.get(c + cfg), sim.get(c + ("p123_b5_s3", True))
-        return ratio(a, b) if a and b else None
+        return paired_ratio(a, b) if a and b else None
 
     lag = sorted(r["send_lag_p99"] for r in rows)
     md = ["# least_work with 4 worker processes on real nginx (Linux)", "",
@@ -100,7 +102,7 @@ def main():
         labels.append(name)
         gm_real.append((g - 1) * 100)
         gm_sim.append((gs - 1) * 100 if gs else 0.0)
-        md.append(f"| {name} | " + " | ".join(fmt(r) if r else "" for r in rs)
+        md.append(f"| {name} | " + " | ".join(fmt_ratio(r) if r else "" for r in rs)
                   + f" | {(g - 1) * 100:+.0f} % | " + (f"{(gs - 1) * 100:+.0f} %" if gs else "") + " |")
     md += ["", "Simulator and real nginx agree on the configurations that share state through "
            "the zone, least_work in the zone included. For those that learn per worker, the "
@@ -135,8 +137,7 @@ def main():
         f.write("\n".join(md))
     print(out)
 
-    sys.path.insert(0, os.path.join(ROOT, "sim"))
-    import charts
+    from nginx_sim import charts
 
     def fig(t):
         return charts.grouped_bars(

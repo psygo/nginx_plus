@@ -4,7 +4,7 @@ Research and upstream contributions improving nginx's load balancing (mainly the
 
 ## North stars
 
-- **Simulate first.** Every new balancing idea is tried in the simulator before any C is written, and a feature isn't proposed without simulated evidence across the standard scenarios (and the robustness scenarios, `nginx_sim.scenarios.ROBUSTNESS`). The simulator is its own project, github.com/psygo/nginx_sim, checked out next to this workspace as `nginx_sim`: everything simulator-related (code, experiments, results, reports, figures) lives there and only there, under its own CLAUDE.md. It must reproduce nginx's actual arithmetic, not an idealized version, and stays validated against queueing theory.
+- **Simulate first.** Every new balancing idea is tried in the simulator before any C is written, and a feature isn't proposed without simulated evidence across the standard scenarios (and the robustness scenarios, `nginx_sim.scenarios.ROBUSTNESS`). The simulator is its own project, github.com/psygo/nginx_sim, checked out in this workspace as `nginx_sim/`: everything simulator-related (code, experiments, results, reports, figures) lives there and only there, under its own CLAUDE.md. It must reproduce nginx's actual arithmetic, not an idealized version, and stays validated against queueing theory.
 - **Confirm on real nginx.** Simulation results that matter are confirmed with the Linux benchmark (`bench/linux/`) on `-O2` builds.
 - **Document failures too.** Ideas that don't work go into `results/rejected_ideas.md` with data, the reason, and what would change the verdict.
 
@@ -23,6 +23,7 @@ Wrapping rules that do apply elsewhere: git commit messages at 72 columns (nginx
 
 ## Conventions
 
+- The workspace folder holds the whole nginx ecosystem we work on, one checkout per project: `nginx/` (with worktrees `nginx-fp/`, `nginx-bucket/`, `nginx-smooth/`), `nginx-tests/`, `nginx.org/`, `nginx_sim/`, `work/` (this repository's `least-time-work`) and `wt/` (exploration worktrees). New nginx-related projects go here too.
 - Workspace layout and status: see `PLAN.md` (PR status first) and `Docs.md` (layout, reports, how to reproduce).
 - `work/` is the checkout of `least-time-work` and the single copy of the evidence files: the workspace-root `bench`, `results`, `patches`, `pr`, `PLAN.md`, `Docs.md` and `CLAUDE.md` are symlinks into it. Edit and commit there.
 - Benchmark runs are valid only if the load generator kept pace: the reports exclude runs whose send lag p99 is over 2 ms and over 3x the median of the same cell (a pause of the load generator, not of nginx), and such runs are re-run with the same seed.

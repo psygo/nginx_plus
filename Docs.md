@@ -31,7 +31,7 @@ Explorations, opened inside this fork against `least-time-work` (not sent to ngi
 | --- | --- | --- |
 | [#1](https://github.com/psygo/nginx_plus/pull/1): worker processes with and without `zone` | `explore/zone-workers` | docs note drafted (local nginx.org branch) |
 | [#2](https://github.com/psygo/nginx_plus/pull/2): learn how response time grows with load | `explore/speed-estimator` | candidate: −9.5 % p99 vs PR 2 (hinge, configured worker count); worst +15 % |
-| [#3](https://github.com/psygo/nginx_plus/pull/3): routing by request cost, learned from response times | `explore/cost-routing` | strongest candidate: −15 to −50 % p99 vs PR 2 with no cost hint in the simulator (worst −8 %); C prototype confirmed on real nginx, −25 to −54 % (1 worker) and −41 % with 4 workers sharing a zone |
+| [#3](https://github.com/psygo/nginx_plus/pull/3): routing by request cost, learned from response times | `explore/cost-routing` | strongest candidate: −15 to −50 % p99 vs PR 2 with no cost hint in the simulator (worst −8 %); C prototype confirmed on real nginx, −25 to −54 % (1 worker), −41 % with 4 workers sharing a zone, −41 % in stream |
 | [#4](https://github.com/psygo/nginx_plus/pull/4): admission control and queueing | `explore/admission-control` | existing features; docs note at most |
 | [#5](https://github.com/psygo/nginx_plus/pull/5): learning-augmented balancing with a floor | `explore/learning-augmented` | research only |
 | [#6](https://github.com/psygo/nginx_plus/pull/6): unbiased `smooth=` weighting | `explore/smooth-weighting` | rejected; PR 2 unchanged |

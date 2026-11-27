@@ -1,4 +1,12 @@
-Title: Upstream: fixed rounding of least_time average response times
+Title: Upstream: fixed rounding of least_time average response times.
+
+I've been looking at nginx's load balancing through [queueing theory](https://en.wikipedia.org/wiki/Queueing_theory). I'm not an expert in it, so I worked with an AI assistant (Claude) to build a simulator that reproduces least_time's exact arithmetic, checked it against known queueing results, and confirmed the findings on real nginx builds.
+
+This PR is the smallest of those findings: a rounding error in the averages least_time keeps. On its own it changes little with the default settings (p99 within ±4 % on real nginx), but a follow-up PR depends on it: that PR makes the 20 ms clustering configurable, which improves p99 by 9-44 % on real nginx when servers differ in speed.
+
+The benchmark scripts and data are in [this branch](https://github.com/psygo/nginx_plus/tree/least-time-evidence), and the simulator, with every simulation result, in [psygo/nginx_sim](https://github.com/psygo/nginx_sim). I couldn't find a load-balancing simulator in the nginx ecosystem; if one would be useful, I'd be happy to open a discussion about it.
+
+Follow-up: #2050 makes the 20 ms clustering configurable (`bucket=`) and adds time-based smoothing (`smooth=`); it depends on this fix.
 
 ## Problem
 
@@ -13,6 +21,8 @@ A sample moves the average only if `|v - avg| * 0.05 >= 0.5`, that is, if it dif
 
 For example, with avg = 10 and every new response taking 2 ms: `0.5 + 2 * 0.05 + 10 * 0.95 = 10.1`, truncated to 10, indefinitely.
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_averages-dark.png"><img alt="least_time's average for a server answering in about 2 ms: the integer average climbs to 10 ms and stays there, the fixed-point average tracks the actual 2.1 ms" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_averages-light.png"></picture>
+
 This shows in a running nginx: with debug logging of the average added to `ngx_http_upstream_least_time_eta()`, two backends answering in about 4.7 ms both show `header_time = 10` on every selection. With this change the logged averages track 4.7 ms.
 
 ## Solution
@@ -25,19 +35,21 @@ With the default 20 ms clustering the error is mostly hidden, and this change is
 
 It matters as soon as the clustering is finer than the error. A follow-up pull request adds `least_time ... bucket=5ms`. With integer averages a 5 ms bucket gains almost nothing, because the 10 ms error dominates; with fixed-point averages it does what it should:
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_bucket-dark.png"><img alt="p99 change vs stock least_time with bucket=5ms: -3 to -5 % with integer averages, -9 to -42 % with this change" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr1_bucket-light.png"></picture>
+
 | scenario (simulated, 70 % load unless noted) | bucket=5ms, integer averages | bucket=5ms, this change |
 | --- | --- | --- |
-| 3 servers, 2/6/15 ms mean, 50 % load | -4 % p99 | -42 % p99 |
-| 3 servers, 2/6/15 ms mean | -2 % | -21 % |
+| 3 servers, 2/6/15 ms mean, 50 % load | -5 % p99 | -42 % p99 |
+| 3 servers, 2/6/15 ms mean | -3 % | -22 % |
 | 8 servers of unequal speed, 10 ms mean | -3 % | -11 % |
-| 16 servers of unequal speed, 10 ms mean | -6 % | -13 % |
+| 16 servers of unequal speed, 10 ms mean | -5 % | -12 % |
 | 8 servers of unequal speed, lognormal times | -4 % | -9 % |
 
-p99 relative to stock `least_time`, geometric mean over 10 paired seeds.
+p99 relative to stock `least_time`, geometric mean over 10 paired seeds × 200,000 requests (`research/results/sim_pr1_bucket.json` in [nginx_sim](https://github.com/psygo/nginx_sim)).
 
 ## Testing
 
-- [x] Manual Testing: debug traces of the averages before and after (above); simulator and Linux benchmark runs (https://github.com/psygo/nginx_plus/tree/least-time-evidence)
+- [x] Manual Testing: debug traces of the averages before and after (above); simulator runs (https://github.com/psygo/nginx_sim) and Linux benchmark runs (https://github.com/psygo/nginx_plus/tree/least-time-evidence)
 - [x] Functional Testing ([nginx-tests](https://github.com/nginx/nginx-tests)): all `upstream*.t` and `stream_upstream*.t` pass, also with `TEST_NGINX_UNSAFE=1`, on macOS/clang and Linux/gcc 14 with `-Werror`
 
 No new test: with the default 20 ms clustering the fix does not change which server is selected, so it cannot be observed from outside nginx, which is how nginx-tests work. It becomes observable with a finer clustering, and the follow-up adds tests there.
@@ -57,4 +69,3 @@ No new test: with the default 20 ms clustering the fix does not change which ser
 
 Bugfix: the "least_time" balancer could use average response times which differed from actual ones by up to 10 milliseconds.
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

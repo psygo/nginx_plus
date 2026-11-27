@@ -1,42 +1,53 @@
 # Queueing-theory improvements to nginx load balancing: plan
 
-Workspace layout:
+Workspace layout (the workspace folder holds the whole nginx ecosystem, one checkout per project):
 
 - `nginx/`: upstream clone of github.com/nginx/nginx (1.31.11, master at 6d81cb7c6). Branch `lt-trace` has the trace logging plus compile-time experiment knobs (`NGX_LT_BUCKET`, `NGX_LT_FP`, `NGX_LT_ALPHA`, `NGX_LT_TAU`). Build dir is `objs-debug`.
 - `nginx-fp/`: worktree, branch `lt-fixed-point`, holds patch 1 (uncommitted)
 - `nginx-bucket/`: worktree, branch `lt-bucket`, holds patch 1 (staged) and patch 2 (unstaged)
 - `nginx-smooth/`: worktree, branch `lt-smooth`, holds patches 1+2 (staged) and patch 3 (unstaged)
-- `nginx-tests/`: clone of nginx/nginx-tests. Branch `lt-bucket` holds the new bucket and smooth tests (uncommitted).
-- `nginx.org/`: clone of nginx/nginx.org (docs), branch `least-time-bucket-smooth`
+- `nginx-tests/`: clone of nginx/nginx-tests, remote `fork` = github.com/psygo/nginx-tests. Branch `lt-bucket` holds the bucket and smooth tests (committed, pushed to the fork).
+- `nginx.org/`: clone of nginx/nginx.org (docs), remote `fork` = github.com/psygo/nginx.org. Branch `least-time-bucket-smooth` (committed, pushed to the fork); branch `zone-workers-note` has uncommitted edits (the zone docs note).
 - `patches/`: exported diffs of the patches, tests and docs
-- `sim/`: discrete-event simulator (`lbsim.py`), experiments (`experiments.py pr|sweep|...`), PR report (`report_pr.py`)
+- `nginx_sim/`: checkout of github.com/psygo/nginx_sim, the simulator as its own project: the package, every simulation experiment (`research/pr` for the PRs, `research/explore` for the explorations) and all simulation results, reports and figures
+- `work/`: checkout of `least-time-work` (this file's branch); the workspace-root `bench`, `results`, `patches`, `pr`, `PLAN.md`, `Docs.md` and `CLAUDE.md` are symlinks into it
+- `wt/`: worktrees of the `explore/*` branches
 - `bench/`: macOS real-nginx harness (Python); `bench/linux/`: the Linux (Docker) harness used for the PR evidence: Go backend and load generator, `run.py`, `matrix.sh`, `report_linux.py`
 - `build/`: `mkvariant.sh` (run from `nginx/`), `bin/nginx-<variant>`
-- `results/`: `sim_pr.md`, `linux_pr.md` (the PR evidence reports), their JSON/JSONL and SVG figures, older `sim_<h>.json` and `*_real.jsonl`
+- `results/`: `linux_pr.md` (the real-nginx PR evidence), its JSONL and figures, `rejected_ideas.md` (the decision log), older `*_real.jsonl`
 - `pr/`: commit messages and PR descriptions (`PR1.md`, `PR2.md`)
 - `PLAN.md`: this file. PR status first, then findings (section 0), then the original plan.
 
-## PR status (2026-11-26)
+## PR status (2026-11-27)
 
-Two PRs to nginx/nginx, decided with the user:
+Two PRs to nginx/nginx, both open, no maintainer review yet:
 
-- **PR 1, bug fix:** patch `0001` (fixed-point averages). Description in `pr/PR1.md`, commit message in `pr/commit-1-fixed-point.txt`.
-- **PR 2, features:** patches `0002` (`bucket=time`) and `0003` (`smooth=time`, weight `min(1, max(0.01, elapsed/smooth))`, 0.01 floor fixed in code), on top of PR 1. Description in `pr/PR2.md`. Companion PRs: nginx-tests (`patches/tests-pr2-...`) and nginx.org docs (`patches/docs-pr2-...`, version 1.31.12 is a placeholder).
+- **PR 1, bug fix:** [nginx/nginx#2048](https://github.com/nginx/nginx/pull/2048) from `lt-fixed-point`, patch `0001` (fixed-point averages); F5 CLA signed. Description in `pr/PR1.md`, commit message in `pr/commit-1-fixed-point.txt`.
+- **PR 2, features:** [nginx/nginx#2050](https://github.com/nginx/nginx/pull/2050) from `lt-smooth`, patches `0002` (`bucket=time`) and `0003` (`smooth=time`, weight `min(1, max(0.01, elapsed/smooth))`, 0.01 floor fixed in code), on top of PR 1. Description in `pr/PR2.md`.
+- **PR 2 companions, open (2026-11-27):** [nginx/nginx-tests#209](https://github.com/nginx/nginx-tests/pull/209) from psygo/nginx-tests `lt-bucket` (tests in their own files, `upstream_least_time_bucket_smooth.t` and `stream_upstream_least_time_bucket_smooth.t`, so nginx without the parameters skips only them; text in `pr/PR2-tests.md`) and [nginx/nginx.org#373](https://github.com/nginx/nginx.org/pull/373) from psygo/nginx.org `least-time-bucket-smooth` (version 1.31.12 is a placeholder; text in `pr/PR2-docs.md`). #2050's description links both.
 
 Evidence:
 
-- Simulator matrix (`results/sim_pr.md`): 12 scenarios × 4 loads × 7 balancers, 20 paired seeds × 300k requests. P1 is within ±2 %. P1+P2+P3 (b5, s3) gives −2…−46 % p99 on heterogeneous backends and −8…−15 % on bimodal. Regressions are at most +6 % (slowdown_ps@0.85; slow3@0.5 +4 %). The sweep picks bucket 5 / smooth 3 s, and smooth 1 s is bad for slow backends.
+- Simulator matrix (`research/results/sim_pr.md` in nginx_sim): 12 scenarios × 4 loads × 7 balancers, 20 paired seeds × 300k requests. P1 is within ±2 %. P1+P2+P3 (b5, s3) gives −2…−46 % p99 on heterogeneous backends and −8…−15 % on bimodal. Regressions are at most +6 % (slowdown_ps@0.85; slow3@0.5 +4 %). The sweep picks bucket 5 / smooth 3 s, and smooth 1 s is bad for slow backends.
 - Linux real-nginx matrix (`results/linux_pr.md`): 18 configurations × 6 variants × 5 paired reps, 540 runs, 0 errors, and the sim matches within a few percent.
   - P1 is −4…+4 %.
   - P1+P2+P3 gives −9…−44 % on heterogeneous backends, −11…−14 % on bimodal, and −12 % on slowdown; it is never significantly worse than stock or than least_conn.
-- nginx-tests: `upstream*.t` and `stream_upstream*.t` pass on macOS/clang and Linux/gcc 14 (`-Werror`, run as root with `TEST_NGINX_GLOBALS="user root;"`).
+- nginx-tests: `upstream*.t` and `stream_upstream*.t` pass on Linux/gcc 14 (`-Werror`, run as root with `TEST_NGINX_GLOBALS="user root;"`; 40 files, 435 tests, 2026-11-27) and passed on macOS/clang before the new tests moved to their own files. With `TEST_NGINX_UNSAFE=1`, `equal last byte time average` in `stream_upstream_least_time.t` fails occasionally, on stock nginx too (1 run in 3).
 
-Pushed 2026-11-26 to the fork github.com/psygo/nginx_plus (remote `fork` in `nginx/`): `lt-fixed-point` (PR 1), `lt-smooth` (PR 2: P1, bucket, smooth), `lt-bucket`, `lt-trace` (experiment only) and the orphan `least-time-evidence` branch (Docs.md, sim, bench, results, patches, pr). The nginx-tests and nginx.org changes are committed locally only; pushing them needs forks of those repos.
+Remaining: wait for review; update the docs version once nginx picks the release.
 
-Remaining (the user said not to open PRs yet):
+## Explorations (2026-11-26)
 
-1. Open the PRs (F5 CLA on the first), then fill in the cross-references (`#PR1`, `#PR2`, `#TBD`).
-2. Fork nginx-tests and nginx.org, push their branches, open the companion PRs.
+Six explorations, each a PR inside the fork (base `least-time-work`, not nginx). Their simulations (10 paired seeds × 200k requests, and the 6 robustness scenarios where relevant) are in nginx_sim, `research/explore`, with the verdicts in its `research/Docs.md`. The `explore/*` branches here keep only their C and real-nginx parts (`explore/cost-routing`: the `least_work` modules and their benchmarks; `explore/zone-workers`: the worker benchmark).
+
+| PR | branch | verdict |
+| --- | --- | --- |
+| [#1](https://github.com/psygo/nginx_plus/pull/1) | `explore/zone-workers` | Without `zone`, 4 workers cost least_conn +16…36 % and patched least_time +11…20 % p99 on real nginx; the sim agrees. Docs note drafted locally on an nginx.org branch (`zone-workers-note`). |
+| [#2](https://github.com/psygo/nginx_plus/pull/2) | `explore/speed-estimator` | Learning how response time grows with load. Round 1 diverged (slope collapse on CPU-sharing backends, +642 %); a slope floor plus fitting on the average load fixed it (−8.2 %), and a hinge with a configured worker count gives −9.5 % p99 vs PR 2 over 72 cells, worst +15 % (slowdown_ps@0.7). Candidate; open: losses on CPU-sharing backends at moderate load, C state (~7 fields), real-nginx check. |
+| [#3](https://github.com/psygo/nginx_plus/pull/3) | `explore/cost-routing` | Least outstanding work with route costs and server speeds learned from response times, no hint: −15 to −50 % p99 vs PR 2 by kind of backend (told the exact costs: −17 to −49 %), worst cell −8 %, robust to wrong route keys. C prototype (external module `least_work key=$uri`, tests pass) confirmed on real nginx: −25 to −54 % p99 vs PR 2 in all 8 Linux cells (geometric mean −38 %), the simulator's prediction inside every interval. With 4 workers its learned state now lives in the upstream `zone` (tests pass): −41 % p99 vs PR 2 with zone on real nginx (simulator −43 %); learning per worker keeps only −8 to −10 %. Stream module done too (tests pass): −41 % p99 vs PR 2 through a stream proxy. The strongest candidate; still needs `resolve` support, a full-table policy for routes, and a decision between a new balancer and `least_time key=`. |
+| [#4](https://github.com/psygo/nginx_plus/pull/4) | `explore/admission-control` | `max_conns` / `queue` cut the tail a lot, but this is existing (or NGINX Plus) functionality, so at most a docs note. |
+| [#5](https://github.com/psygo/nginx_plus/pull/5) | `explore/learning-augmented` | A least_time shortlist bounds damage (+43 % worst vs +1625 % without), per decision rather than per outcome; eps 0.25 trades −16 %/+16 %. Research only. |
+| [#6](https://github.com/psygo/nginx_plus/pull/6) | `explore/smooth-weighting` | Unbiased `smooth=` weightings give no better p99 (+0.4…+1.9 %), so PR 2 stays unchanged. Rejected (`rejected_ideas.md` §5). |
 
 ## 0. Findings so far (2026-11-25)
 
@@ -53,9 +64,9 @@ Remaining (the user said not to open PRs yet):
 | H3 SED / service rate | **Rejected as a default.** | Helps FCFS backends (-15 to -22 % vs lt), hurts processor sharing (104 vs 85 at 0.7) and equal servers with mixed requests. Peak EWMA is about equal to lt with bucket 1. Details: `results/rejected_ideas.md`. |
 | H4 EWMA | **Confirmed**, as alpha/tau. | Stock lt is worse than lc on bimodal traffic (sim 317 vs 268, real 307 vs 277). A smaller bucket makes it worse (360) because EWMA noise becomes visible. alpha 0.01 with a 3 s time floor fixes it (286) and keeps the gains. |
 | H5 random two least_time | **Rejected on latency.** | big64 at 0.7: 75 vs 41 for full least_time. CPU and lock contention are not modeled; revisit only if lock contention shows up on Linux. Details: `results/rejected_ideas.md`. |
-| H6 least_work | **Promising, out of tree.** | Bimodal heterogeneous: about −40 % p99 vs lc and lt with learned per-class cost; about −30 % at σ=0.5 estimation error. It needs cost hints, so it belongs in a dynamic module. |
+| H6 least_work | **Confirmed on real nginx, without hints.** | Costs per route and speeds per server are learned from response times, so no cost hint is needed (exploration #3). Real nginx, prototype module: −25 to −54 % p99 vs PR 2 (`results/least_work_real.md` on `explore/cost-routing`). |
 
-### Staged-patch simulation (p99 ms, 5 seeds, ±95 % CI in `results/sim_staged.json`)
+### Staged-patch simulation (p99 ms, 5 seeds, ±95 % CI in nginx_sim, `research/results/sim_staged.json`)
 
 | scenario | lc | stock lt | P1: fp | P1+P2: fp, b5 | P1+P2+P3: fp, b5, α .01, τ 3 s | fp, b1, α .01, τ 3 s |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -123,7 +134,7 @@ This also matches the simulator:
 
 1. Open an upstream issue with the dead-band analysis, the traces and the staged tables; ask which interface they prefer for P2 and P3. Then send P1 (smallest, pure fix) first.
 2. Linux host: re-run H2 (workers with `reuseport`) and the real A/B at higher rates with optimized builds. All macOS numbers here come from `-O0` debug builds and Python backends.
-3. `least_work` dynamic module (H6).
+3. `least_work` (H6): prototype done, shares its state through the upstream zone, confirmed on real nginx with 1 and 4 workers and in stream (fork PR #3); next `resolve` support and the shape decision.
 4. Documentation PR (nginx.org) for `zone` with multiple workers.
 
 ## 1. What the code actually does
@@ -174,7 +185,7 @@ Kill criterion for each: if the simulator shows < 5 % p99 improvement at 70–95
 4. Add a throwaway debug patch that logs `(peer, rt, bucketed rt, conns, eta, chosen)` per selection. This is the oracle for validating the simulator.
 5. Run small scripted scenarios (2–4 local backends with fixed sleeps or CPU loops) and record traces. Confirm H1's degeneracy and H2's per-worker divergence directly from the logs.
 
-### Phase 2: Faithful simulator (2–3 days), in `sim/`
+### Phase 2: Faithful simulator (2–3 days), now psygo/nginx_sim
 
 6. Write a Python discrete-event simulator (stdlib plus numpy) with:
    - balancers: RR (smooth WRR), least_conn, least_time {header, last_byte} × {plain, inflight}, random two least_conn, plus candidates: random two least_time, bucket variants, service-rate estimator, time-decayed EWMA, least_work, hybrid;

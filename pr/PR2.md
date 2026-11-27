@@ -1,6 +1,10 @@
 Title: Upstream: "bucket" and "smooth" parameters of the "least_time" directive
 
-Depends on #PR1 (fixed rounding of least_time averages); this branch contains that commit plus two more. Documentation: nginx/nginx.org#TBD. Tests: nginx/nginx-tests#TBD.
+This builds on #2048 (fixed rounding of `least_time` averages) and comes from the same simulation and benchmark work described there. With the rounding fixed, `least_time` can tell apart servers that differ by a few milliseconds, but two constants still stop it from doing so: the 20 ms rounding step and the fixed weight of each new response in the average. This PR makes both configurable, as `bucket=` and `smooth=`. Both are off by default, so existing configurations behave exactly as before.
+
+With `bucket=5ms smooth=3s`, p99 latency on real nginx improves by 9-44 % when servers differ in speed and by up to 14 % with a mix of cheap and expensive requests. No tested configuration gets significantly worse than stock `least_time` or `least_conn`.
+
+The branch contains the commit of #2048 plus two more, so only the last two need review here. Documentation: nginx/nginx.org#373. Tests: nginx/nginx-tests#209.
 
 ## Problem
 
@@ -29,13 +33,15 @@ Implementation notes:
 
 ## Results
 
-Evidence repository with the simulator, benchmark code, raw results and reports: https://github.com/psygo/nginx_plus/tree/least-time-evidence.
+Benchmark code, raw results and reports: https://github.com/psygo/nginx_plus/tree/least-time-evidence. The simulator and the simulation reports: https://github.com/psygo/nginx_sim.
 
 ### Real nginx
 
 nginx master and patched trees, `-O2`, in a Linux VM (Docker Desktop, 12 vCPUs of an Apple M2 Max), with nginx, backends and load generator on separate CPU sets. Backends are single-worker FCFS Go servers holding each request for cost/speed ms. The load generator is open loop (Poisson arrivals, latency from each request's scheduled send time, so no coordinated omission). Every repetition uses the same arrival times and per-request costs for all variants, and variants run in shuffled order. 5 repetitions × 30 s per cell, 540 runs, 0 errors.
 
 p99 change with `bucket=5ms smooth=3s` (geometric mean of paired ratios, 95 % CI):
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_real-dark.png"><img alt="Real nginx: p99 change with bucket=5ms smooth=3s vs stock least_time per scenario, with 95 % confidence intervals" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_real-light.png"></picture>
 
 | scenario | load | vs stock least_time | vs least_conn |
 | --- | --- | --- | --- |
@@ -61,6 +67,8 @@ p99 change with `bucket=5ms smooth=3s` (geometric mean of paired ratios, 95 % CI
 No configuration is significantly worse than stock `least_time` or than `least_conn`.
 
 Each parameter is needed. p99 vs stock, same runs:
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_params-dark.png"><img alt="p99 change vs stock least_time with bucket=5ms only, smooth=3s only, and both, on real nginx" src="https://raw.githubusercontent.com/psygo/nginx_plus/9b316c99f073580fec0d0033780719a086639916/results/figs/pr2_params-light.png"></picture>
 
 | scenario | load | bucket=5ms only | smooth=3s only | both |
 | --- | --- | --- | --- | --- |
@@ -107,15 +115,15 @@ Parameter sweep (8 scenarios, mean p99 change vs stock / worst scenario):
 
 ## Testing
 
-- [x] Functional Testing ([nginx-tests](https://github.com/nginx/nginx-tests)): new tests for both parameters in `upstream_least_time.t` and `stream_upstream_least_time.t` (nginx/nginx-tests#TBD); all `upstream*.t` and `stream_upstream*.t` pass on macOS/clang and Linux/gcc 14 (`-Werror`), with and without `TEST_NGINX_UNSAFE=1`
-- [x] Manual Testing: the benchmark and simulation above (https://github.com/psygo/nginx_plus/tree/least-time-evidence); configuration errors for `bucket=0`, `bucket=6s`, `smooth=0` and unknown parameters
+- [x] Functional Testing ([nginx-tests](https://github.com/nginx/nginx-tests)): new tests for both parameters in their own files, `upstream_least_time_bucket_smooth.t` and `stream_upstream_least_time_bucket_smooth.t` (nginx/nginx-tests#209), so that nginx without them skips only those; all `upstream*.t` and `stream_upstream*.t` pass on Linux/gcc 14 (`-Werror`), and passed on macOS/clang before the tests moved to their own files. With `TEST_NGINX_UNSAFE=1` the new tests pass too; `equal last byte time average` in `stream_upstream_least_time.t` fails occasionally, on stock nginx as well
+- [x] Manual Testing: the benchmark (https://github.com/psygo/nginx_plus/tree/least-time-evidence) and simulation (https://github.com/psygo/nginx_sim) above; configuration errors for `bucket=0`, `bucket=6s`, `smooth=0` and unknown parameters
 
 ## Checklist
 
 - [x] I have read the [CONTRIBUTING](https://github.com/nginx/nginx/blob/master/CONTRIBUTING.md) guidelines
 - [x] I have added tests (if applicable) to validate my changes
 - [x] All existing tests pass
-- [x] I have updated documentation where necessary (nginx/nginx.org#TBD)
+- [x] I have updated documentation where necessary (nginx/nginx.org#373)
 - [x] My branch is rebased on the latest master
 - [x] This PR targets the master branch from my fork
 - [x] My commit message follows NGINX standards
@@ -123,5 +131,3 @@ Parameter sweep (8 scenarios, mean p99 change vs stock / worst scenario):
 ## Release Notes
 
 Feature: the "bucket" and "smooth" parameters of the "least_time" directive.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)

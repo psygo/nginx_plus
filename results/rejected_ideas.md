@@ -2,15 +2,15 @@
 
 These are the ideas that were tried and not proposed, with the data, the reason, and what would change the verdict. They are kept so they don't get re-tried blindly, and because a reviewer may well ask "did you consider X?".
 
-All simulation numbers are p99 latency in ms, the mean over seeds. The scenarios are described in [sim_pr.md](sim_pr.md#scenarios).
+All simulation numbers are p99 latency in ms, the mean over seeds. The simulation data and reports are in [psygo/nginx_sim](https://github.com/psygo/nginx_sim) (`research/results`), and the scenarios are described in [sim_pr.md](https://github.com/psygo/nginx_sim/blob/main/research/results/sim_pr.md#scenarios).
 
-The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is weaker evidence than the 20 × 300,000 of the PR matrix. Differences under about 5 % in them are noise. The conclusions below rest on larger differences.
+The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is weaker evidence than the 20 × 300,000 of the PR matrix. Differences under about 5 % in them are noise. The conclusions below rest on larger differences. These sweeps were also run with an earlier version of the simulator: re-running them with the current one moves p99 by a few percent, and the conclusions were not re-checked with it (nginx_sim, `research/Docs.md`, Reproducibility).
 
 ## 1. Power of two choices
 
 **Idea.** Instead of scanning every server, pick two at random and send the request to the better of the two. This is a classic queueing-theory result (Mitzenmacher; Vvedenskaya et al.): two random choices are exponentially better than one. Finagle and Linkerd balance this way, and NGINX Plus offers `random two least_time`. Open-source nginx only has `random two least_conn`, so adding `least_time` there looked like an easy feature.
 
-**Experiment.** H5, in `results/sim_h5.json`. Servers have random speeds between ½ and 2 (`bigN`). Two setups: 1 worker with shared state, and 8 workers each with private state (nginx without `zone`).
+**Experiment.** H5, in `sim_h5.json` (nginx_sim). Servers have random speeds between ½ and 2 (`bigN`). Two setups: 1 worker with shared state, and 8 workers each with private state (nginx without `zone`).
 
 | servers | load | workers | least_conn | least_time | random two least_conn | random two least_time | P2C Peak EWMA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 
 **Idea.** `least_time` multiplies the average *response* time by the number of requests in progress. A response time already includes time spent waiting, so the wait gets counted twice. Queueing theory's shortest-expected-delay rule uses the *service* time instead. So the idea was to estimate each server's service time as `response_time / (1 + requests in progress when it was sent)`, which is exact for a server that handles one request at a time in arrival order (FCFS), and to choose the server with the lowest `service_time × (1 + in progress)`.
 
-**Experiment.** H3 (`results/sim_h3.json`) covers the slowdown scenarios: one of 4 servers drops to ¼ speed for 20 s, and p99 is measured during the slow window. The backends are FCFS with 1 worker, FCFS with 4 workers (`_c4`), and processor sharing (`_ps`). H6 (`results/sim_h6.json`) covers mixed 2 ms / 80 ms requests.
+**Experiment.** H3 (`sim_h3.json` in nginx_sim) covers the slowdown scenarios: one of 4 servers drops to ¼ speed for 20 s, and p99 is measured during the slow window. The backends are FCFS with 1 worker, FCFS with 4 workers (`_c4`), and processor sharing (`_ps`). H6 (`results/sim_h6.json`) covers mixed 2 ms / 80 ms requests.
 
 | scenario | load | least_conn | least_time | least_time, bucket 1 | service-rate rule |
 | --- | --- | --- | --- | --- | --- |
@@ -55,11 +55,17 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | idea | result | where |
 | --- | --- | --- |
 | `bucket=1ms` as the recommendation | Breaks re-probing of a server whose average was halved by the inactivity decay; the existing nginx-tests "response time decay probe" test fails. 5 ms keeps the re-probing and is within noise of 1 ms on latency. | `PLAN.md`, patch 2 notes |
-| A smaller `bucket` with integer averages | Gains mostly vanish because the 10 ms rounding error dominates: -2 to -6 % instead of -9 to -42 %. This is why PR 1 exists. | `pr/PR1.md` table |
+| A smaller `bucket` with integer averages | Gains mostly vanish because the 10 ms rounding error dominates: -3 to -5 % instead of -9 to -42 % (`sim_pr1_bucket.json`). This is why PR 1 exists. | `pr/PR1.md` table |
 | `bucket` without smoothing | Worse on mixed 2 ms / 80 ms requests: +1 to +8 % p99 vs stock. This is why `bucket` and `smooth` travel together in PR 2. | `sim_pr.md`, P1+P2 column |
 | `smooth=1s` | Too short for slow backends: +17 to +20 % on 20/60/150 ms servers. 3 s and 10 s are both fine. | `sim_pr.md`, sweep |
 | Two smoothing knobs (`alpha=` and a time floor) | Not tested as a separate design; dropped in favor of one `smooth=` time to keep the interface small. | decision, 2026-11-25 |
 | Peak EWMA (Finagle/Linkerd estimator) | Good on unequal servers with mixed requests (bimodal4_het, -20 % vs stock), about equal to `least_time` with a small bucket elsewhere. Not pursued: `smooth=` gets most of the same benefit inside the existing directive. | `sim_h3.json`, `sim_h6.json` |
+| Speed estimator (exploration #1) without a slope floor | The learned cost per connection collapses to 0 in overload on CPU-sharing backends, and requests herd onto one server at a time: +642 % on slowdown_ps at 85 % load, runaways in 2 of 10 seeds on hetero8_ps and fast3_ps at 95 %. Fixed by `b >= 0.25 * a`. | `speed_estimator.md`, round 1 |
+| Speed estimator fitted on the average load over each request's life, without a slope floor | Sounds like the principled fix (a CPU-sharing server's speed depends on the load during the request), but it removes only some runaways: still +542 % on slowdown_ps at 85 %. Kept as a complement to the floor, where it helps at 95 % load. | `speed_estimator.md`, round 2 |
+| Speed estimator with a 3 s memory instead of 10 s | Worse on average (-3.5 to -5.2 % vs -5.0 to -6.8 % in round 2) and not better on the slowdown scenarios, where a faster reaction was expected to help. | `speed_estimator.md`, round 2 |
+| Speed estimator with a learned knee (`HingeDelay`, k learned from 1, 2, 4, 8, 16) | -8.6 % vs PR 2 over 72 cells, against -9.5 % when k is configured and -8.2 % for the plain line. At moderate load a 4-worker server rarely has more than 4 requests in progress, so the knee is not identifiable and the fit falls back to k = 1: mixed4 at 85 % stays at +12 % (configured: +1 %). A per-server worker count stated by the operator is simpler and better. | `speed_estimator.md`, round 3 |
+| Learned route costs (exploration #2) without calibration | Learning only from requests that found their server idle stops when it matters: a flooded server is never idle, so a wrong speed estimate is never corrected. Runaways on 4-worker and processor-sharing backends: +26 % on average on 4-worker groups, worst +97 %, one seed 49x the p99 of patched least_time. Fixed by starting unlearned servers on the common speed scale, moving a first sample gradually, and a per-server calibration from every completion. | `cost_routing.md`, robustness; `test_cost_routing.py` |
+| Learned route costs with a fast calibration (weight 0.02, about 50 responses) | The calibration factor is noisy with mixed request costs and costs about a third of the gain: -21.7 % on average vs -26.7 % with 0.002 (about 500 responses), worst cell +5 % vs -8 %. | `cost_cal.json` |
 
 ## 4. Benchmark methods that were dropped
 
@@ -69,3 +75,19 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 | First macOS bimodal A/B (3 seeds) | Overlapped other jobs on the machine; too noisy to use. | 8-seed rerun on an idle machine (`fp_bimodal_real.jsonl`) |
 | Plain `time.Sleep` pacing in the Docker VM | Timer wake-ups 0.3 to 3.5 ms late, which distorts millisecond-scale latencies. | sleep until 2 ms before, then spin |
 | Busy "spinner" threads at idle priority to keep CPUs awake | Made the tail worse through contention on the host. | removed |
+
+## 5. An unbiased `smooth` weighting
+
+**Idea.** Patch 3 weights each response by the time since the server's previous response. On a busy server that gap is roughly the response's own service time, so slow responses count more and the average is biased upward: +14 % on slow3's busy 20 ms server and +36 to +41 % on its moderately used 60 ms one (`research/tests/test_smooth_weighting.py` in nginx_sim). Two weightings without the bias were tried: the time since the previous *dispatch* to the server, and the server's *typical* gap (an average of earlier gaps, independent of the sample being weighted). Both pass the bias tests.
+
+**Result.** Neither improves p99 ([smooth_weighting.md](https://github.com/psygo/nginx_sim/blob/main/research/results/smooth_weighting.md) in nginx_sim, 18 scenarios × 4 loads × 10 seeds):
+
+| comparison | geometric mean | worst cell |
+| --- | --- | --- |
+| dispatch-gap vs patch 3, smooth=3s | +1.9 % | +11 % (fast3_c4@0.5) |
+| typical-gap vs patch 3, smooth=3s | +0.8 % | +10 % (fast3_c4@0.7) |
+| typical-gap vs patch 3, smooth=10s | +0.4 % | +6 % (fast3_c4@0.5) |
+
+**Likely why (not tested separately).** The bias overestimates slower servers, and overestimating them is a cautious mistake for the tail: it sends them slightly less traffic, which is what the p99 wants. An accurate mean is not the goal; a good routing decision is.
+
+**What would change the verdict.** A workload where the bias makes a fast server look slow (for example a server whose response times vary widely with load), or a use of the average outside routing (reporting), where accuracy matters. Patch 3 stays as it is.

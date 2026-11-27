@@ -116,8 +116,9 @@ def main():
 def figs():
     """results/figs/zone_workers-{light,dark}.png: p99 change vs 1 worker."""
     import sys
-    sys.path.insert(0, os.path.join(ROOT, "sim"))
-    import charts
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import nginx_sim_path  # noqa: F401  (puts nginx_sim on sys.path)
+    from nginx_sim import charts
     rows = [json.loads(x) for x in open(os.path.join(RES, "linux_zone.jsonl")) if x.strip()]
     bad = {id(r) for r in disturbed(rows, lambda r: (r["scenario"], r["util"]))}
     by = {}

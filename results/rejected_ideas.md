@@ -78,7 +78,7 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 
 ## 5. An unbiased `smooth` weighting
 
-**Idea.** Patch 3 weights each response by the time since the server's previous response. On a busy server that gap is roughly the response's own service time, so slow responses count more and the average is biased upward: +14 % on slow3's busy 20 ms server and +36 to +41 % on its moderately used 60 ms one (`sim/explore/test_smooth_weighting.py`). Two weightings without the bias were tried: the time since the previous *dispatch* to the server, and the server's *typical* gap (an average of earlier gaps, independent of the sample being weighted). Both pass the bias tests.
+**Idea.** Patch 3 weights each response by the time since the server's previous response. On a busy server that gap is roughly the response's own service time, so slow responses count more and the average is biased upward: +14 % on slow3's busy 20 ms server and +36 to +41 % on its moderately used 60 ms one (`research/tests/test_smooth_weighting.py` in nginx_sim). Two weightings without the bias were tried: the time since the previous *dispatch* to the server, and the server's *typical* gap (an average of earlier gaps, independent of the sample being weighted). Both pass the bias tests.
 
 **Result.** Neither improves p99 ([smooth_weighting.md](https://github.com/psygo/nginx_sim/blob/main/research/results/smooth_weighting.md) in nginx_sim, 18 scenarios × 4 loads × 10 seeds):
 

@@ -7,6 +7,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common                                          # noqa: E402
 from cost_routing import SITA, LearnedCost, LeastWorkC, WORKLOADS, classes_workload  # noqa: E402
+from cost_routing import split_shares, split_table  # noqa: E402
 from lbsim import PeerState, Request                   # noqa: E402
 import experiments                                     # noqa: E402
 from lbsim import Sim                                  # noqa: E402
@@ -266,6 +267,21 @@ class TestLearnedCost(unittest.TestCase):
         req.est_cost = 2.0
         self.assertEqual(bal.key(req), 2.0)
         self.assertEqual(LearnedCost().key(req), 1)
+
+
+class TestSplit(unittest.TestCase):
+    def test_shares_group_servers_by_speed_and_sum_seeds(self):
+        rows = [dict(scenario="cr_x_het4", util=0.7, balancer="b", speeds=[2, 1, 1, 0.5],
+                     by_class_peer={"0": {"0": 1, "1": 2, "2": 3, "3": 4}, "1": {"0": 3}}),
+                dict(scenario="cr_x_het4", util=0.7, balancer="b", speeds=[2, 1, 1, 0.5],
+                     by_class_peer={"0": {"3": 10}, "1": {"0": 1}})]
+        sh = split_shares(rows)[("cr_x_het4", 0.7, "b")]
+        self.assertAlmostEqual(sh["0"][2], 1 / 20)
+        self.assertAlmostEqual(sh["0"][1], 5 / 20)
+        self.assertAlmostEqual(sh["0"][0.5], 14 / 20)
+        self.assertEqual(sh["1"], {2: 1.0})
+        # the slowest speed is found even though class 1 never reached it
+        self.assertEqual(split_table(rows)[2], "| x_het4 | 0.7 | b | 5 % / 70 % | 100 % / 0 % |")
 
 
 if __name__ == "__main__":

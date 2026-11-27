@@ -29,6 +29,11 @@ Workloads: bimodal (90 % 2 ms / 10 % 80 ms) and api3 (70 % 1 ms, 25 % 10 ms,
 
   python3 sim/explore/cost_routing.py run      # 10 seeds x 200k
   python3 sim/explore/cost_routing.py report   # results/cost_routing.md
+  python3 sim/explore/cost_routing.py learned  # learned costs and speeds
+  python3 sim/explore/cost_routing.py robust   # robustness scenarios
+  python3 sim/explore/cost_routing.py cvariant # least_work_c, the C prototype's model
+  python3 sim/explore/cost_routing.py split    # class x server shares (cost_split.json)
+  python3 sim/explore/cost_routing.py figs     # results/figs/cost_routing-*.png
 """
 import json
 import math
@@ -507,6 +512,38 @@ def report():
     print(out)
 
 
+def split_shares(rows):
+    """{(scenario, util, balancer): {class: {speed: share}}}: the share of each class's
+    requests served by the servers of each speed, summed over seeds."""
+    acc = {}
+    for r in rows:
+        k = (r["scenario"], r["util"], r["balancer"])
+        for c, per in r["by_class_peer"].items():
+            d = acc.setdefault(k, {}).setdefault(c, {})
+            for p, n in per.items():
+                s = r["speeds"][int(p)]
+                d[s] = d.get(s, 0) + n
+    return {k: {c: {s: n / sum(d.values()) for s, n in d.items()} for c, d in v.items()}
+            for k, v in acc.items()}
+
+
+def split_table(rows):
+    """Markdown rows: share of the cheapest and costliest class on the fastest and
+    slowest servers, PR 2 vs least_work_c."""
+    sh = split_shares(rows)
+    out = ["| scenario | load | balancer | cheapest class on fastest / slowest | "
+           "costliest class on fastest / slowest |", "| --- | --- | --- | --- | --- |"]
+    for (sc, u, b) in sorted(sh):
+        v = sh[(sc, u, b)]
+        cs = sorted(v, key=int)
+        speeds = set().union(*v.values())
+        fast, slow = max(speeds), min(speeds)
+        lo, hi = v[cs[0]], v[cs[-1]]
+        out.append(f"| {sc[3:]} | {u} | {b} | {lo.get(fast, 0) * 100:.0f} % / {lo.get(slow, 0) * 100:.0f} % | "
+                   f"{hi.get(fast, 0) * 100:.0f} % / {hi.get(slow, 0) * 100:.0f} % |")
+    return out
+
+
 def figs():
     """results/figs/cost_routing-{light,dark}.png"""
     import charts
@@ -585,6 +622,14 @@ if __name__ == "__main__":
                       for sc in scs for u in UTILS]
                 g = math.exp(mean(math.log(r) for r, _ in rs))
                 print(f"{b:16s} {k:5s} geomean {(g - 1) * 100:+.1f} %  worst {(max(rs)[0] - 1) * 100:+.0f} % ({max(rs)[1]})")
+    elif cmd == "split":
+        # where each request class goes: share of each class per server speed
+        J = [dict(scenario=sc, util=u, balancer=b, seed=k, n=200_000, split=True)
+             for sc in ("cr_bimodal_het4", "cr_bimodal_het8", "cr_api3_het4", "cr_api3_het8")
+             for u in UTILS for k in range(1, 6) for b in ("p123_b5_s3", "least_work_c")]
+        rows = run_jobs_ext(J, "cost_split.json", label="cost_split")
+        for line in split_table(rows):
+            print(line)
     elif cmd == "learned":
         run_jobs_ext(jobs_learned(), "cost_learned.json", label="cost_learned")
         report()

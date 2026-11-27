@@ -38,6 +38,17 @@ class TestCommon(unittest.TestCase):
         self.assertEqual(sum(v["n"] for v in r["by_class"].values()), r["measured"])
         self.assertEqual(set(r["by_class"]), {"0", "1"})
         self.assertEqual(r["rejected"], 0)
+        self.assertNotIn("by_class_peer", r)
+
+    def test_run_job_ext_split_by_class_and_server(self):
+        r = common.run_job_ext(dict(scenario="bimodal4_het", util=0.5, balancer="least_conn",
+                                    seed=1, n=5000, split=True))
+        self.assertEqual(r["speeds"], [2, 1, 1, 0.5])
+        sp = r["by_class_peer"]
+        self.assertEqual(set(sp), {"0", "1"})
+        for c, v in sp.items():
+            self.assertEqual(sum(v.values()), r["by_class"][c]["n"])
+            self.assertLessEqual(set(v), {"0", "1", "2", "3"})
 
 
     def test_run_jobs_keeps_job_order_and_reports_progress(self):

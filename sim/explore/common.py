@@ -216,6 +216,14 @@ def run_job_ext(job):
     res["by_class"] = {str(c): {"n": len(v), "p50": _quantile(sorted(v), 0.5),
                                 "p99": _quantile(sorted(v), 0.99)}
                        for c, v in byc.items()}
+    if job.get("split"):
+        # requests per class and server (after warm-up), and the server speeds
+        sp = {}
+        for x in d:
+            c = sp.setdefault(str(x[3]), {})
+            c[str(x[2])] = c.get(str(x[2]), 0) + 1
+        res["by_class_peer"] = sp
+        res["speeds"] = [b.speed for b in sim.backends]
     res["rejected"] = getattr(sim, "rejected", 0) / job["n"]
     if windows:
         sim.warmup = 0.0

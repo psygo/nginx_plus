@@ -33,6 +33,7 @@ Workloads: bimodal (90 % 2 ms / 10 % 80 ms) and api3 (70 % 1 ms, 25 % 10 ms,
   python3 sim/explore/cost_routing.py robust   # robustness scenarios
   python3 sim/explore/cost_routing.py cvariant # least_work_c, the C prototype's model
   python3 sim/explore/cost_routing.py split    # class x server shares (cost_split.json)
+  python3 sim/explore/cost_routing.py workers [4]  # several worker processes, zone or not
   python3 sim/explore/cost_routing.py figs     # results/figs/cost_routing-*.png
 """
 import json
@@ -293,6 +294,7 @@ class LeastWorkC(LearnedCost):
 
 register("least_work_c", lambda: LeastWorkC())
 register("least_work_c_t0", lambda: LeastWorkC(tol=0.0))
+register("least_work_c_pw", lambda: common.PerWorker(LeastWorkC))
 register("learned_cost", lambda: LearnedCost(alpha=0.02, cal_alpha=0.002))
 register("learned_cost_a05", lambda: LearnedCost(alpha=0.05, cal_alpha=0.002))
 register("learned_cost_hint", lambda: LearnedCost(alpha=0.02, key="hint", cal_alpha=0.002))
@@ -512,6 +514,45 @@ def report():
     print(out)
 
 
+KINDS = (("fcfs", "one request at a time"), ("_ps", "processor sharing"),
+         ("_c4", "4 workers per server"), ("_mix", "a mix of all three"))
+WORKER_CONFIGS = [("least_conn", False, "least_conn, no zone"),
+                  ("least_conn", True, "least_conn, zone"),
+                  ("p123_b5_s3", False, "PR 2, no zone"),
+                  ("p123_b5_s3", True, "PR 2, zone"),
+                  ("least_work_c_pw", False, "least_work, no zone (each worker learns alone)"),
+                  ("least_work_c_pw", True, "least_work, zone for nginx's peers only"),
+                  ("least_work_c", True, "least_work, state in the zone")]
+
+
+def kind_of(sc):
+    return next((k for k, _ in KINDS[1:] if sc.endswith(k)), "fcfs")
+
+
+def report_workers(rows, workers):
+    """Geometric-mean p99 ratio by kind of backend, against PR 2 with a zone (the
+    configuration nginx recommends for several workers), and the worst cell."""
+    by = {}
+    for r in rows:
+        if r.get("workers") == workers:
+            by.setdefault((r["scenario"], r["util"], r["balancer"], r["shared"]), {})[r["seed"]] = r["p99"]
+    out = [f"| {workers} workers: p99 vs PR 2 with zone | " + " | ".join(n for _, n in KINDS)
+           + " | worst cell |", "| --- |" + " --- |" * (len(KINDS) + 1)]
+    for b, sh, name in WORKER_CONFIGS:
+        cells = [(sc, u) for (sc, u, bb, ss) in by if bb == b and ss == sh]
+        if not cells:
+            continue
+        rs = {c: ratio(by[c + (b, sh)], by[c + ("p123_b5_s3", True)])[0] for c in cells}
+        cols = []
+        for k, _ in KINDS:
+            v = [math.log(x) for c, x in rs.items() if kind_of(c[0]) == k]
+            cols.append(f"{(math.exp(mean(v)) - 1) * 100:+.1f} %" if v else "")
+        w = max(rs, key=rs.get)
+        out.append(f"| {name} | " + " | ".join(cols)
+                   + f" | {(rs[w] - 1) * 100:+.0f} % ({w[0][3:]}@{w[1]}) |")
+    return out
+
+
 def split_shares(rows):
     """{(scenario, util, balancer): {class: {speed: share}}}: the share of each class's
     requests served by the servers of each speed, summed over seeds."""
@@ -629,6 +670,17 @@ if __name__ == "__main__":
              for u in UTILS for k in range(1, 6) for b in ("p123_b5_s3", "least_work_c")]
         rows = run_jobs_ext(J, "cost_split.json", label="cost_split")
         for line in split_table(rows):
+            print(line)
+    elif cmd == "workers":
+        # several nginx worker processes: without zone, with zone, with least_work's
+        # state in the zone (10 seeds x 200k, robustness matrix)
+        w = int(sys.argv[2]) if len(sys.argv) > 2 else 4
+        J = [dict(scenario=sc, util=u, balancer=b, seed=k, n=200_000, workers=w, shared=sh)
+             for sc in ROBUST_SCEN for u in UTILS for k in range(1, 11)
+             for b, sh, _ in WORKER_CONFIGS]
+        out = f"cost_workers{w}.json"
+        rows = run_jobs_ext(J, out, label=out)
+        for line in report_workers(rows, w):
             print(line)
     elif cmd == "learned":
         run_jobs_ext(jobs_learned(), "cost_learned.json", label="cost_learned")

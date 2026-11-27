@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common                                          # noqa: E402
 from cost_routing import SITA, LearnedCost, LeastWorkC, WORKLOADS, classes_workload  # noqa: E402
 from cost_routing import split_shares, split_table  # noqa: E402
+from common import PerWorker  # noqa: E402
 from lbsim import PeerState, Request                   # noqa: E402
 import experiments                                     # noqa: E402
 from lbsim import Sim                                  # noqa: E402
@@ -282,6 +283,42 @@ class TestSplit(unittest.TestCase):
         self.assertEqual(sh["1"], {2: 1.0})
         # the slowest speed is found even though class 1 never reached it
         self.assertEqual(split_table(rows)[2], "| x_het4 | 0.7 | b | 5 % / 70 % | 100 % / 0 % |")
+
+
+class TestPerWorker(unittest.TestCase):
+    def sim(self, bal, workers, shared, n=20000):
+        sc = experiments.scen("cr_api3_het4")
+        bks, wl = sc["backends"](), sc["workload"]()
+        return Sim(bks, bal, wl, experiments.rate_for(0.7, bks, wl), n, workers=workers,
+                   shared=shared, seed=3)
+
+    def test_one_worker_is_the_plain_balancer(self):
+        a = self.sim(LeastWorkC(), 1, True)
+        a.run()
+        b = self.sim(PerWorker(LeastWorkC), 1, True)
+        b.run()
+        self.assertEqual(a.done, b.done)
+
+    def test_each_worker_learns_alone(self):
+        pw = PerWorker(LeastWorkC)
+        s = self.sim(pw, 4, False)
+        s.run()
+        self.assertEqual(sorted(pw.inst), [0, 1, 2, 3])
+        for b in pw.inst.values():
+            self.assertTrue(b.kappa)                         # every worker learned routes
+            for w in b.work.values():
+                self.assertAlmostEqual(w, 0.0, places=6)     # its own work only, drained
+        # private learning differs from shared learning
+        k = [round(b.kappa[0], 6) for b in pw.inst.values()]
+        self.assertGreater(len(set(k)), 1)
+
+    def test_upstream_zone_shares_nginx_peer_state_only(self):
+        pw = PerWorker(LeastWorkC)
+        s = self.sim(pw, 4, True)
+        s.run()
+        self.assertEqual(len(s.states), 1)                   # conns and weights shared
+        self.assertEqual(len(pw.inst), 4)                    # learned state per worker
+        self.assertEqual(sum(p.conns for p in s.states[0]), 0)
 
 
 if __name__ == "__main__":

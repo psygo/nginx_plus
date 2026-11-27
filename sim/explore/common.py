@@ -81,6 +81,34 @@ class SEDTrue(RoundRobin):
 experiments.BAL["sed_true"] = lambda: SEDTrue()
 
 
+class PerWorker:
+    """One balancer instance per worker process, so the state a balancer keeps in itself
+    (rather than in PeerState) stays private to each worker, as in nginx when the
+    balancer has no shared memory. PeerState (conns, weights) follows Sim(shared=...):
+    shared=False is an upstream without `zone`, shared=True an upstream with `zone`
+    (nginx's own peer state shared) whose balancer still learns per worker."""
+
+    def __init__(self, factory):
+        self.factory = factory
+        self.inst = {}
+        self.name = factory().name + " per worker"
+
+    def _b(self, req):
+        b = self.inst.get(req.worker)
+        if b is None:
+            b = self.inst[req.worker] = self.factory()
+        return b
+
+    def select(self, sim, peers, req, now):
+        return self._b(req).select(sim, peers, req, now)
+
+    def on_dispatch(self, sim, p, req, now):
+        self._b(req).on_dispatch(sim, p, req, now)
+
+    def on_done(self, sim, p, req, now, rt):
+        self._b(req).on_done(sim, p, req, now, rt)
+
+
 def register(name, factory):
     experiments.BAL[name] = factory
 

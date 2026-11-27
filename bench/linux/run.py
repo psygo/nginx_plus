@@ -131,7 +131,7 @@ def start_backends(sc):
     return procs
 
 
-def start_nginx(variant, sc, workers, zone):
+def start_nginx(variant, sc, workers, zone, reuseport=True):
     binary, directive = VARIANTS[variant]
     os.makedirs(RUN, exist_ok=True)
     servers = "\n".join(f"        server 127.0.0.1:{9001 + i} max_fails=0;"
@@ -139,7 +139,7 @@ def start_nginx(variant, sc, workers, zone):
     conf = NGINX_CONF.format(
         workers=workers, run=RUN, directive=directive, servers=servers,
         zone="zone u 1m;" if zone else "",
-        reuseport=" reuseport" if workers > 1 else "")
+        reuseport=" reuseport" if workers > 1 and reuseport else "")
     with open(f"{RUN}/nginx.conf", "w") as f:
         f.write(conf)
     p = subprocess.Popen(["taskset", "-c", CPU_NGINX, f"{BIN}/nginx-{binary}",
@@ -169,13 +169,17 @@ def run_one(variant, scname, util, rep, args):
     backends = start_backends(sc)
     nginx = None
     try:
-        nginx = start_nginx(variant, sc, args.workers, args.zone)
+        nginx = start_nginx(variant, sc, args.workers, args.zone,
+                            not args.no_reuseport)
         cmd = ["taskset", "-c", CPU_LOADGEN, f"{BIN}/loadgen",
                "-url", "http://127.0.0.1:8899/", "-rate", f"{rate:.3f}",
                "-duration", f"{duration}s", "-warmup", f"{args.warmup}s",
                "-dist", sc["dist"], "-seed", str(rep)]
         if sc.get("window"):
             cmd += ["-window", sc["window"]]
+        if args.raw_dir:
+            cmd += ["-raw", os.path.join(args.raw_dir,
+                    f"{scname}_{util}_{variant}_w{args.workers}{'z' if args.zone else ''}_r{rep}.txt")]
         out = subprocess.run(cmd, capture_output=True, text=True, check=True,
                              env=dict(os.environ, GOGC="400"))
         res = json.loads(out.stdout)
@@ -183,6 +187,7 @@ def run_one(variant, scname, util, rep, args):
         stop(([nginx] if nginx else []) + backends)
     res.update(scenario=scname, util=util, variant=variant, rep=rep,
                workers=args.workers, zone=args.zone,
+               reuseport=args.workers > 1 and not args.no_reuseport,
                directive=VARIANTS[variant][1], binary=VARIANTS[variant][0])
     return res
 
@@ -198,6 +203,9 @@ def main():
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--zone", action="store_true")
+    ap.add_argument("--no-reuseport", action="store_true",
+                    help="with --workers > 1: plain listen socket (nginx default)")
+    ap.add_argument("--raw-dir", default="", help="write each run's latencies here (loadgen -raw)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
 

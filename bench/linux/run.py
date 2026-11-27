@@ -3,7 +3,8 @@
 
 Every repetition r runs all variants back to back, in an order shuffled with
 seed r, each against fresh backends and the same load (loadgen -seed r: same
-arrival times and per-request costs).  Scenarios mirror sim/experiments.py.
+arrival times and per-request costs).  Scenarios mirror the simulator's
+(nginx_sim/scenarios.py in psygo/nginx_sim).
 
 CPU layout (12 vCPUs): nginx 0-3, backends 4-7, load generator 8-11.
 

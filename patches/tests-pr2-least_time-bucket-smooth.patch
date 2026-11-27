@@ -1,148 +1,308 @@
-diff --git a/stream_upstream_least_time.t b/stream_upstream_least_time.t
-index 7874db7..0bf3084 100644
---- a/stream_upstream_least_time.t
-+++ b/stream_upstream_least_time.t
-@@ -99,6 +99,18 @@ stream {
-         server 127.0.0.1:8082;
-     }
- 
-+    upstream u12 {
+From 47ba41247e56004d85eefbf36f66a5aa8a1437ee Mon Sep 17 00:00:00 2001
+From: Philippe Fanaro <philippefanaro@gmail.com>
+Date: Thu, 26 Nov 2026 11:23:19 -0300
+Subject: [PATCH] Tests: least_time "bucket" and "smooth" parameters.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ stream_upstream_least_time_bucket_smooth.t | 152 +++++++++++++++++++++
+ upstream_least_time_bucket_smooth.t        | 128 +++++++++++++++++
+ 2 files changed, 280 insertions(+)
+ create mode 100644 stream_upstream_least_time_bucket_smooth.t
+ create mode 100644 upstream_least_time_bucket_smooth.t
+
+diff --git a/stream_upstream_least_time_bucket_smooth.t b/stream_upstream_least_time_bucket_smooth.t
+new file mode 100644
+index 0000000..747b981
+--- /dev/null
++++ b/stream_upstream_least_time_bucket_smooth.t
+@@ -0,0 +1,152 @@
++#!/usr/bin/perl
++
++# (C) Nginx, Inc.
++
++# Stream tests for upstream least_time balancer module, "bucket" and
++# "smooth" parameters.
++
++###############################################################################
++
++use warnings;
++use strict;
++
++use Test::More;
++
++BEGIN { use FindBin; chdir($FindBin::Bin); }
++
++use lib 'lib';
++use Test::Nginx qw/ :DEFAULT http_end /;
++
++###############################################################################
++
++select STDERR; $| = 1;
++select STDOUT; $| = 1;
++
++plan(skip_all => 'win32') if $^O eq 'MSWin32';
++
++my $t = Test::Nginx->new()->has(qw/http stream stream_upstream_least_time/)
++	->has(qw/rewrite map/);
++
++$t->write_file_expand('nginx.conf', <<'EOF');
++
++%%TEST_GLOBALS%%
++
++daemon off;
++
++events {
++}
++
++stream {
++    %%TEST_GLOBALS_STREAM%%
++
++    # separate upstreams for sane statistics
++
++    upstream u1 {
 +        least_time last_byte bucket=5s;
 +        server 127.0.0.1:8081;
 +        server 127.0.0.1:8082;
 +    }
 +
-+    upstream u13 {
++    upstream u2 {
 +        least_time last_byte smooth=10s;
 +        server 127.0.0.1:8081;
 +        server 127.0.0.1:8082;
 +    }
 +
-     server {
-         listen      127.0.0.1:8085;
-         proxy_pass  u;
-@@ -153,6 +165,16 @@ stream {
-         listen      127.0.0.1:8096;
-         proxy_pass  u11;
-     }
-+
 +    server {
-+        listen      127.0.0.1:8097;
-+        proxy_pass  u12;
++        listen      127.0.0.1:8085;
++        proxy_pass  u1;
 +    }
 +
 +    server {
-+        listen      127.0.0.1:8098;
-+        proxy_pass  u13;
++        listen      127.0.0.1:8086;
++        proxy_pass  u2;
 +    }
- }
- 
- http {
-@@ -193,7 +215,7 @@ $t->write_file('index.html', '0123456789' x 204);
- 
- $t->run_daemon(\&http_daemon, port(8083));
- $t->run_daemon(\&http_daemon, port(8084));
--$t->try_run('no least_time')->plan(13);
-+$t->try_run('no least_time')->plan(15);
- 
- $t->waitforsocket('127.0.0.1:' . port(8083));
- $t->waitforsocket('127.0.0.1:' . port(8084));
-@@ -265,6 +287,31 @@ http_end $_ for @s;
- is(many('/', 10, "127.0.0.1:$p9"), "$p1: 10", 'greater last byte time');
- 
- 
++}
++
++http {
++    %%TEST_GLOBALS_HTTP%%
++
++    map $server_port:$arg_r $map_rate {
++        %%PORT_8081%%:1    500;
++
++        default            0;
++    }
++
++    server {
++        listen       127.0.0.1:8081;
++        listen       127.0.0.1:8082;
++        server_name  localhost;
++
++        add_header X-Port $server_port;
++        set $limit_rate $map_rate;
++
++        location / { }
++    }
++}
++
++EOF
++
++$t->write_file('index.html', '0123456789' x 204);
++$t->try_run('no least_time bucket and smooth')->plan(2);
++
++###############################################################################
++
++my (@s);
++my @ports = my ($p1, $p2) = (port(8081), port(8082));
++
 +# last byte times within the same bucket are considered equal,
 +# so the slower peer is still selected
 +
-+my $p17 = port(8097);
++my $pb = port(8085);
 +
 +@s = map {
-+	http_get('/?r=1', start => 1, socket => getconn("127.0.0.1:$p17"))
++	http_get('/?r=1', start => 1, socket => getconn("127.0.0.1:$pb"))
 +} (1 .. 6);
 +http_end $_ for @s;
 +
-+like(many('/', 10, "127.0.0.1:$p17"), qr/$p1: [1-9], $p2: [1-9]/, 'bucket');
-+
++like(many('/', 10, "127.0.0.1:$pb"), qr/$p1: [1-9], $p2: [1-9]/, 'bucket');
 +
 +# smoothed last byte time, faster peer wins
 +
-+my $p18 = port(8098);
++my $ps = port(8086);
 +
 +@s = map {
-+	http_get('/?r=1', start => 1, socket => getconn("127.0.0.1:$p18"))
++	http_get('/?r=1', start => 1, socket => getconn("127.0.0.1:$ps"))
 +} (1 .. 6);
 +http_end $_ for @s;
 +
-+is(many('/', 10, "127.0.0.1:$p18"), "$p2: 10", 'smooth');
++is(many('/', 10, "127.0.0.1:$ps"), "$p2: 10", 'smooth');
 +
++###############################################################################
 +
- SKIP: {
- skip 'unsafe on VM', 2 unless $ENV{TEST_NGINX_UNSAFE};
- 
-diff --git a/upstream_least_time.t b/upstream_least_time.t
-index 86970a7..889fbc3 100644
---- a/upstream_least_time.t
-+++ b/upstream_least_time.t
-@@ -93,6 +93,16 @@ http {
-         server 127.0.0.1:8081;
-         server 127.0.0.1:8082;
-     }
-+    upstream u11 {
++sub getconn {
++	my $peer = shift;
++	my $s = IO::Socket::INET->new(
++		Proto => 'tcp',
++		PeerAddr => $peer
++	)
++		or die "Can't connect to nginx: $!\n";
++
++	return $s;
++}
++
++sub many {
++	my ($uri, $count, $peer) = @_;
++	my %ports;
++
++	for (1 .. $count) {
++		if (http_get($uri, socket => getconn($peer)) =~ /X-Port: (\d+)/)
++		{
++			$ports{$1} = 0 unless defined $ports{$1};
++			$ports{$1}++;
++		}
++
++		select undef, undef, undef, 0.04;
++	}
++
++	my @keys = map { my $p = $_; grep { $p == $_ } keys %ports } @ports;
++	return join ', ', map { $_ . ": " . $ports{$_} } @keys;
++}
++
++###############################################################################
+diff --git a/upstream_least_time_bucket_smooth.t b/upstream_least_time_bucket_smooth.t
+new file mode 100644
+index 0000000..473f784
+--- /dev/null
++++ b/upstream_least_time_bucket_smooth.t
+@@ -0,0 +1,128 @@
++#!/usr/bin/perl
++
++# (C) Nginx, Inc.
++
++# Tests for upstream least_time balancer module, "bucket" and "smooth"
++# parameters.
++
++###############################################################################
++
++use warnings;
++use strict;
++
++use Test::More;
++
++BEGIN { use FindBin; chdir($FindBin::Bin); }
++
++use lib 'lib';
++use Test::Nginx qw/ :DEFAULT http_end /;
++
++###############################################################################
++
++select STDERR; $| = 1;
++select STDOUT; $| = 1;
++
++plan(skip_all => 'win32') if $^O eq 'MSWin32';
++
++my $t = Test::Nginx->new()
++	->has(qw/http proxy upstream_least_time rewrite map/)
++	->write_file_expand('nginx.conf', <<'EOF');
++
++%%TEST_GLOBALS%%
++
++daemon off;
++
++events {
++}
++
++http {
++    %%TEST_GLOBALS_HTTP%%
++
++    # separate upstreams for sane statistics
++
++    upstream u1 {
 +        least_time last_byte bucket=5s;
 +        server 127.0.0.1:8081;
 +        server 127.0.0.1:8082;
 +    }
-+    upstream u12 {
++    upstream u2 {
 +        least_time last_byte smooth=10s;
 +        server 127.0.0.1:8081;
 +        server 127.0.0.1:8082;
 +    }
- 
-     map $server_port:$arg_r $map_rate {
-         %%PORT_8081%%:1    500;
-@@ -136,6 +146,12 @@ http {
-         location /u10/ {
-             proxy_pass http://u10/;
-         }
-+        location /u11/ {
-+            proxy_pass http://u11/;
++
++    map $server_port:$arg_r $map_rate {
++        %%PORT_8081%%:1    500;
++
++        default            0;
++    }
++
++    server {
++        listen       127.0.0.1:8080;
++        server_name  localhost;
++
++        location /u1/ {
++            proxy_pass http://u1/;
 +        }
-+        location /u12/ {
-+            proxy_pass http://u12/;
++        location /u2/ {
++            proxy_pass http://u2/;
 +        }
-     }
- 
-     server {
-@@ -164,7 +180,7 @@ EOF
- $t->write_file('index.html', '0123456789' x 204);
- 
- $t->run_daemon(\&http_daemon, port(8083));
--$t->try_run('no least_time')->plan(12);
-+$t->try_run('no least_time')->plan(14);
- 
- $t->waitforsocket('127.0.0.1:' . port(8083));
- 
-@@ -226,6 +242,23 @@ http_end $_ for @s;
- is(many('/u4/', 10), "$p1: 10", 'greater response time');
- 
- 
++    }
++
++    server {
++        listen       127.0.0.1:8081;
++        listen       127.0.0.1:8082;
++        server_name  localhost;
++
++        keepalive_requests 1;
++
++        location / {
++            add_header X-Port $server_port;
++            set $limit_rate $map_rate;
++        }
++    }
++}
++
++EOF
++
++$t->write_file('index.html', '0123456789' x 204);
++$t->try_run('no least_time bucket and smooth')->plan(2);
++
++###############################################################################
++
++my (@s);
++my @ports = my ($p1, $p2) = (port(8081), port(8082));
++
 +# response times within the same bucket are considered equal,
 +# so the slower peer is still selected
 +
-+@s = map { http_get('/u11/?r=1', start => 1) } (1 .. 6);
++@s = map { http_get('/u1/?r=1', start => 1) } (1 .. 6);
 +http_end $_ for @s;
 +
-+like(many('/u11/', 10), qr/$p1: [1-9], $p2: [1-9]/, 'bucket');
-+
++like(many('/u1/', 10), qr/$p1: [1-9], $p2: [1-9]/, 'bucket');
 +
 +# smoothed response time, faster peer wins
 +
-+@s = map { http_get('/u12/?r=1', start => 1) } (1 .. 6);
++@s = map { http_get('/u2/?r=1', start => 1) } (1 .. 6);
 +http_end $_ for @s;
 +
-+is(many('/u12/', 10), "$p2: 10", 'smooth');
++is(many('/u2/', 10), "$p2: 10", 'smooth');
 +
++###############################################################################
 +
- SKIP: {
- skip 'unsafe on VM', 2 unless $ENV{TEST_NGINX_UNSAFE};
- 
++sub many {
++	my ($uri, $count) = @_;
++	my %ports;
++
++	for (1 .. $count) {
++		if (http_get($uri) =~ /X-Port: (\d+)/) {
++			$ports{$1} = 0 unless defined $ports{$1};
++			$ports{$1}++;
++		}
++	}
++
++	my @keys = map { my $p = $_; grep { $p == $_ } keys %ports } @ports;
++	return join ', ', map { $_ . ": " . $ports{$_} } @keys;
++}
++
++###############################################################################
+-- 
+2.54.0 (Apple Git-157)
+

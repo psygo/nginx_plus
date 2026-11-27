@@ -1,15 +1,17 @@
 # Queueing-theory improvements to nginx load balancing: plan
 
-Workspace layout:
+Workspace layout (the workspace folder holds the whole nginx ecosystem, one checkout per project):
 
 - `nginx/`: upstream clone of github.com/nginx/nginx (1.31.11, master at 6d81cb7c6). Branch `lt-trace` has the trace logging plus compile-time experiment knobs (`NGX_LT_BUCKET`, `NGX_LT_FP`, `NGX_LT_ALPHA`, `NGX_LT_TAU`). Build dir is `objs-debug`.
 - `nginx-fp/`: worktree, branch `lt-fixed-point`, holds patch 1 (uncommitted)
 - `nginx-bucket/`: worktree, branch `lt-bucket`, holds patch 1 (staged) and patch 2 (unstaged)
 - `nginx-smooth/`: worktree, branch `lt-smooth`, holds patches 1+2 (staged) and patch 3 (unstaged)
-- `nginx-tests/`: clone of nginx/nginx-tests. Branch `lt-bucket` holds the new bucket and smooth tests (uncommitted).
-- `nginx.org/`: clone of nginx/nginx.org (docs), branch `least-time-bucket-smooth`
+- `nginx-tests/`: clone of nginx/nginx-tests, remote `fork` = github.com/psygo/nginx-tests. Branch `lt-bucket` holds the bucket and smooth tests (committed, pushed to the fork).
+- `nginx.org/`: clone of nginx/nginx.org (docs), remote `fork` = github.com/psygo/nginx.org. Branch `least-time-bucket-smooth` (committed, pushed to the fork); branch `zone-workers-note` has uncommitted edits (the zone docs note).
 - `patches/`: exported diffs of the patches, tests and docs
-- the simulator is its own project, github.com/psygo/nginx_sim, checked out next to this workspace: the package, every simulation experiment (`research/pr` for the PRs, `research/explore` for the explorations) and all simulation results, reports and figures
+- `nginx_sim/`: checkout of github.com/psygo/nginx_sim, the simulator as its own project: the package, every simulation experiment (`research/pr` for the PRs, `research/explore` for the explorations) and all simulation results, reports and figures
+- `work/`: checkout of `least-time-work` (this file's branch); the workspace-root `bench`, `results`, `patches`, `pr`, `PLAN.md`, `Docs.md` and `CLAUDE.md` are symlinks into it
+- `wt/`: worktrees of the `explore/*` branches
 - `bench/`: macOS real-nginx harness (Python); `bench/linux/`: the Linux (Docker) harness used for the PR evidence: Go backend and load generator, `run.py`, `matrix.sh`, `report_linux.py`
 - `build/`: `mkvariant.sh` (run from `nginx/`), `bin/nginx-<variant>`
 - `results/`: `linux_pr.md` (the real-nginx PR evidence), its JSONL and figures, `rejected_ideas.md` (the decision log), older `*_real.jsonl`

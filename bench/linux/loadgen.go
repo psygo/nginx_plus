@@ -15,11 +15,14 @@
 //
 // dist: exp:MEAN | bimodal:A,B,P (exponential with mean B with prob P, else A)
 //
-//	      | classes:M0,P0,M1,P1,... (route i with probability Pi, exponential
-//	      cost with mean Mi; the request goes to URL "r<i>?c=..." so that nginx
-//	      sees one route per class, and p99 is also reported per class)
+//	| classes:M0,P0,M1,P1,... (route i with probability Pi, exponential
+//	cost with mean Mi; the request goes to URL "r<i>?c=..." so that nginx
+//	sees one route per class, and p99 is also reported per class)
 //
-//		| lognormal:MEDIAN,SIGMA
+// For stream balancers, -class-port-base B sends class i to port B+i (a
+// stream route is a port) and -no-keepalive makes every request a session.
+//
+//	| lognormal:MEDIAN,SIGMA
 package main
 
 import (
@@ -145,6 +148,8 @@ func main() {
 	seed := flag.Int64("seed", 1, "seed for arrivals and costs")
 	raw := flag.String("raw", "", "write measured latencies (ms) here")
 	window := flag.String("window", "", "a:b report an extra summary for requests scheduled in [a,b) s after warm-up")
+	portBase := flag.Int("class-port-base", 0, "if set, send class i to 127.0.0.1:<base+i> (stream routes by port)")
+	noKeepalive := flag.Bool("no-keepalive", false, "one connection per request (one stream session each)")
 	flag.Parse()
 
 	smp, err := parseDist(*dist)
@@ -177,6 +182,7 @@ func main() {
 		MaxIdleConns:        4096,
 		MaxIdleConnsPerHost: 4096,
 		IdleConnTimeout:     60 * time.Second,
+		DisableKeepAlives:   *noKeepalive,
 	}
 	client := &http.Client{Transport: tr, Timeout: 30 * time.Second}
 
@@ -193,6 +199,9 @@ func main() {
 			u := fmt.Sprintf("%s?c=%.3f", *url, p.cost)
 			if p.class >= 0 {
 				u = fmt.Sprintf("%sr%d?c=%.3f", *url, p.class, p.cost)
+			}
+			if p.class >= 0 && *portBase > 0 {
+				u = fmt.Sprintf("http://127.0.0.1:%d/r%d?c=%.3f", *portBase+p.class, p.class, p.cost)
 			}
 			lag := float64(time.Since(sched)) / float64(time.Millisecond)
 			resp, err := client.Get(u)

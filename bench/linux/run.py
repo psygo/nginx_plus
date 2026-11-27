@@ -59,7 +59,14 @@ VARIANTS = {
     "least_work":  ("lw", "least_work key=$uri"),
     # the prototype before its state moved into the zone (per worker always)
     "least_work_old": ("lw-old", "least_work key=$uri"),
+    # stream proxy (STREAM_CONF): one listen port per request class, one
+    # session per request; least_time first_byte is the stream "header"
+    "stream_least_conn": ("lw", "least_conn"),
+    "stream_p123_b5_s3": ("p123", "least_time first_byte bucket=5ms smooth=3s"),
+    "stream_least_work": ("lw", "least_work key=$server_port"),
 }
+
+STREAM_PORT_BASE = 8900
 
 NGINX_CONF = """
 worker_processes {workers};
@@ -94,6 +101,40 @@ http {{
     }}
 }}
 """
+
+
+STREAM_CONF = """
+worker_processes {workers};
+pid {run}/nginx.pid;
+error_log {run}/error.log warn;
+worker_rlimit_nofile 65536;
+
+events {{
+    worker_connections 16384;
+}}
+
+stream {{
+    upstream u {{
+        {zone}
+        {directive};
+{servers}
+    }}
+
+    server {{
+        listen 127.0.0.1:8899 backlog=8192{reuseport};
+{listens}
+        proxy_pass u;
+        proxy_connect_timeout 5s;
+        proxy_timeout 60s;
+        proxy_next_upstream off;
+    }}
+}}
+"""
+
+
+def n_classes(dist):
+    kind, args = dist.split(":")
+    return len(args.split(",")) // 2 if kind == "classes" else 0
 
 
 def mean_cost(dist):
@@ -145,10 +186,17 @@ def start_nginx(variant, sc, workers, zone):
     os.makedirs(RUN, exist_ok=True)
     servers = "\n".join(f"        server 127.0.0.1:{9001 + i} max_fails=0;"
                         for i in range(len(sc["speeds"])))
-    conf = NGINX_CONF.format(
-        workers=workers, run=RUN, directive=directive, servers=servers,
-        zone="zone u 1m;" if zone else "",
-        reuseport=" reuseport" if workers > 1 else "")
+    rp = " reuseport" if workers > 1 else ""
+    if variant.startswith("stream_"):
+        listens = "\n".join(f"        listen 127.0.0.1:{STREAM_PORT_BASE + c} backlog=8192{rp};"
+                             for c in range(n_classes(sc["dist"])))
+        conf = STREAM_CONF.format(
+            workers=workers, run=RUN, directive=directive, servers=servers,
+            zone="zone u 1m;" if zone else "", reuseport=rp, listens=listens)
+    else:
+        conf = NGINX_CONF.format(
+            workers=workers, run=RUN, directive=directive, servers=servers,
+            zone="zone u 1m;" if zone else "", reuseport=rp)
     with open(f"{RUN}/nginx.conf", "w") as f:
         f.write(conf)
     p = subprocess.Popen(["taskset", "-c", CPU_NGINX, f"{BIN}/nginx-{binary}",
@@ -185,6 +233,8 @@ def run_one(variant, scname, util, rep, args):
                "-dist", sc["dist"], "-seed", str(rep)]
         if sc.get("window"):
             cmd += ["-window", sc["window"]]
+        if variant.startswith("stream_"):
+            cmd += ["-class-port-base", str(STREAM_PORT_BASE), "-no-keepalive"]
         out = subprocess.run(cmd, capture_output=True, text=True, check=True,
                              env=dict(os.environ, GOGC="400"))
         res = json.loads(out.stdout)

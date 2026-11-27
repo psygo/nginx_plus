@@ -13,7 +13,8 @@ git -c safe.directory="*" -C /w/nginx archive origin/master | tar -x -C /build/l
 cd /build/lw-bench
 ./auto/configure --with-stream --with-cc-opt='-O2' --without-http_gzip_module \
     --without-http_rewrite_module --with-threads \
-    --add-module=$B/cmodule/ngx_http_upstream_least_work_module > /build/lw.configure.log 2>&1
+    --add-module=$B/cmodule/ngx_http_upstream_least_work_module \
+    --add-module=$B/cmodule/ngx_stream_upstream_least_work_module > /build/lw.configure.log 2>&1
 make -j"$(nproc)" > /build/lw.make.log 2>&1
 cp objs/nginx /build/bin/nginx-lw
 echo "built lw: $(md5sum objs/nginx | cut -c1-12)"

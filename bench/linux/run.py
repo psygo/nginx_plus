@@ -57,6 +57,8 @@ VARIANTS = {
     "p123_b5_s3":  ("p123", "least_time header bucket=5ms smooth=3s"),
     "p13_s3":      ("p123", "least_time header smooth=3s"),
     "least_work":  ("lw", "least_work key=$uri"),
+    # the prototype before its state moved into the zone (per worker always)
+    "least_work_old": ("lw-old", "least_work key=$uri"),
 }
 
 NGINX_CONF = """

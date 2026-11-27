@@ -13,7 +13,7 @@ make -j12 -f objs-t/Makefile > make.log 2>&1 || { grep -E "error|warning" make.l
 cp objs-t/nginx /build/bin/nginx-lw
 echo "built nginx-lw $(md5sum objs-t/nginx | cut -c1-10)"
 if [ "$1" = test ]; then
-  cp $M/t/upstream_least_work.t /tmp/ntm/
+  cp $M/t/upstream_least_work*.t /tmp/ntm/
   cd /tmp/ntm && TEST_NGINX_GLOBALS="user root;" TEST_NGINX_BINARY=/build/bin/nginx-lw \
-      prove -v upstream_least_work.t 2>&1 | grep -E "^(ok|not ok)|Result|Failed|skipped|#   (got|expected)"
+      prove -v upstream_least_work.t upstream_least_work_zone.t 2>&1 | grep -E "^(ok|not ok)|Result|Failed|skipped|#   (got|expected)"
 fi

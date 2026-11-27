@@ -55,9 +55,9 @@ http {
         server 127.0.0.1:8082;
     }
 
-    # slow responses: limit_rate on a 2000 byte file (the first second's
-    # worth is sent at once); ?r=1 slows down the first backend only (about
-    # 1s), /cheap takes about 0.25s and /costly about 3s on either backend
+    # slow responses: limit_rate on a 2000 byte file (limit_rate releases
+    # bytes on whole seconds); ?r=1 slows down the first backend only (about
+    # 2s), /cheap takes about 1s and /costly about 4s on either backend
 
     map $server_port:$arg_r $map_rate {
         %%PORT_8081%%:1    1000;
@@ -121,13 +121,13 @@ my @ports = my ($p1, $p2) = (port(8081), port(8082));
 is(many('/u0/', 10), "$p1: 5, $p2: 5", 'no statistics, round-robin');
 
 # server speed is learned from requests that found the server idle:
-# the first backend answers in about 1s, the second at once
+# the first backend answers in about 2s, the second at once
 
 http_get('/u1/?r=1') for (1 .. 6);
 
 is(many('/u1/?r=1', 10), "$p2: 10", 'slower server avoided');
 
-# route costs: /cheap takes about 0.25s and /costly about 3s on either
+# route costs: /cheap takes about 1s and /costly about 4s on either
 # server; learn both, sequentially
 
 http_get('/u2/cheap') for (1 .. 4);

@@ -22,7 +22,10 @@
  * millisecond clocks is unbiased.  Averages of time are used as at least
  * 0.5 ms, so that a speed stays bounded.
  *
- * Learned state is kept per worker process (like least_conn without zone).
+ * If the upstream has a zone, the learned state (route costs, server speeds
+ * and calibrations, work in progress) is allocated there and shared by all
+ * worker processes, under the lock that already protects the peers;
+ * otherwise it is kept per worker process (like least_conn without zone).
  * It mirrors LeastWorkC in sim/explore/cost_routing.py.
  */
 
@@ -47,7 +50,7 @@ typedef struct {
 typedef struct {
     double                             num;       /* speed = num / den */
     double                             den;
-    double                             gnum;      /* calibration = gnum / gden */
+    double                             gnum;      /* calibration: gnum / gden */
     double                             gden;
     double                             work;      /* predicted, in progress */
     unsigned                           learned:1;
@@ -55,16 +58,22 @@ typedef struct {
 } ngx_http_upstream_lw_state_t;
 
 
-typedef struct {
-    ngx_http_complex_value_t          *key;
-    double                             alpha;
-    double                             cal_alpha;
+/* learned state: in the upstream zone if there is one */
 
-    ngx_http_upstream_lw_route_t      *routes;
+typedef struct {
     double                             cost_all;
     ngx_uint_t                         cost_all_set;
     ngx_uint_t                         nstates;
     ngx_http_upstream_lw_state_t      *states;
+    ngx_http_upstream_lw_route_t      *routes;
+} ngx_http_upstream_lw_data_t;
+
+
+typedef struct {
+    ngx_http_complex_value_t          *key;
+    double                             alpha;
+    double                             cal_alpha;
+    ngx_http_upstream_lw_data_t       *data;
 } ngx_http_upstream_lw_conf_t;
 
 
@@ -88,15 +97,18 @@ static ngx_int_t ngx_http_upstream_get_least_work_peer(
     ngx_peer_connection_t *pc, void *data);
 static void ngx_http_upstream_free_least_work_peer(ngx_peer_connection_t *pc,
     void *data, ngx_uint_t state);
-static double ngx_http_upstream_lw_speed(ngx_http_upstream_lw_conf_t *lwcf,
+static ngx_http_upstream_lw_data_t *ngx_http_upstream_lw_alloc(
+    ngx_slab_pool_t *shpool, ngx_pool_t *pool, ngx_uint_t n);
+static double ngx_http_upstream_lw_speed(ngx_http_upstream_lw_data_t *data,
     ngx_int_t i);
-static double ngx_http_upstream_lw_estimate(ngx_http_upstream_lw_conf_t *lwcf,
+static double ngx_http_upstream_lw_estimate(ngx_http_upstream_lw_data_t *data,
     ngx_int_t i, double cost, double vdef, double *pred, double *work);
 static ngx_http_upstream_lw_route_t *ngx_http_upstream_lw_route(
-    ngx_http_upstream_lw_conf_t *lwcf, uint32_t hash, ngx_uint_t create);
+    ngx_http_upstream_lw_data_t *data, uint32_t hash, ngx_uint_t create);
 static void ngx_http_upstream_lw_learn(ngx_http_upstream_lw_peer_data_t *lwp,
     double rt);
 
+static ngx_int_t ngx_http_upstream_least_work_init_module(ngx_cycle_t *cycle);
 static void *ngx_http_upstream_least_work_create_conf(ngx_conf_t *cf);
 static char *ngx_http_upstream_least_work(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
@@ -137,7 +149,7 @@ ngx_module_t  ngx_http_upstream_least_work_module = {
     ngx_http_upstream_least_work_commands, /* module directives */
     NGX_HTTP_MODULE,                       /* module type */
     NULL,                                  /* init master */
-    NULL,                                  /* init module */
+    ngx_http_upstream_least_work_init_module, /* init module */
     NULL,                                  /* init process */
     NULL,                                  /* init thread */
     NULL,                                  /* exit thread */
@@ -165,20 +177,98 @@ ngx_http_upstream_init_least_work(ngx_conf_t *cf,
 
     peers = us->peer.data;
 
-    lwcf->nstates = peers->number;
-    lwcf->states = ngx_pcalloc(cf->pool, peers->number
-                                         * sizeof(ngx_http_upstream_lw_state_t));
-    if (lwcf->states == NULL) {
-        return NGX_ERROR;
-    }
+    /* per worker process; moved to the zone, if any, at module init */
 
-    lwcf->routes = ngx_pcalloc(cf->pool, NGX_HTTP_LW_ROUTES
-                                         * sizeof(ngx_http_upstream_lw_route_t));
-    if (lwcf->routes == NULL) {
+    lwcf->data = ngx_http_upstream_lw_alloc(NULL, cf->pool, peers->number);
+    if (lwcf->data == NULL) {
         return NGX_ERROR;
     }
 
     us->peer.init = ngx_http_upstream_init_least_work_peer;
+
+    return NGX_OK;
+}
+
+
+static ngx_http_upstream_lw_data_t *
+ngx_http_upstream_lw_alloc(ngx_slab_pool_t *shpool, ngx_pool_t *pool,
+    ngx_uint_t n)
+{
+    size_t                        size;
+    ngx_http_upstream_lw_data_t  *data;
+
+    size = sizeof(ngx_http_upstream_lw_data_t)
+           + n * sizeof(ngx_http_upstream_lw_state_t)
+           + NGX_HTTP_LW_ROUTES * sizeof(ngx_http_upstream_lw_route_t);
+
+    data = shpool ? ngx_slab_calloc(shpool, size) : ngx_pcalloc(pool, size);
+    if (data == NULL) {
+        return NULL;
+    }
+
+    data->nstates = n;
+    data->states = (ngx_http_upstream_lw_state_t *) (data + 1);
+    data->routes = (ngx_http_upstream_lw_route_t *) (data->states + n);
+
+    return data;
+}
+
+
+static ngx_int_t
+ngx_http_upstream_least_work_init_module(ngx_cycle_t *cycle)
+{
+#if (NGX_HTTP_UPSTREAM_ZONE)
+
+    ngx_uint_t                      i;
+    ngx_http_upstream_lw_conf_t    *lwcf;
+    ngx_http_upstream_lw_data_t    *data;
+    ngx_http_upstream_rr_peers_t   *peers;
+    ngx_http_upstream_srv_conf_t   *uscf, **uscfp;
+    ngx_http_upstream_main_conf_t  *umcf;
+
+    /*
+     * shared memory zones are initialized by now, and the peers of an
+     * upstream with zone are in its zone; this runs before worker processes
+     * are started, so all of them see the same learned state
+     */
+
+    umcf = ngx_http_cycle_get_module_main_conf(cycle, ngx_http_upstream_module);
+    if (umcf == NULL) {
+        return NGX_OK;
+    }
+
+    uscfp = umcf->upstreams.elts;
+
+    for (i = 0; i < umcf->upstreams.nelts; i++) {
+        uscf = uscfp[i];
+
+        if (uscf->peer.init_upstream != ngx_http_upstream_init_least_work
+            || uscf->shm_zone == NULL)
+        {
+            continue;
+        }
+
+        peers = uscf->peer.data;
+
+        if (peers->shpool == NULL) {
+            continue;
+        }
+
+        data = ngx_http_upstream_lw_alloc(peers->shpool, NULL, peers->number);
+        if (data == NULL) {
+            ngx_log_error(NGX_LOG_EMERG, cycle->log, 0,
+                          "upstream zone \"%V\" is too small for least_work "
+                          "in upstream \"%V\"",
+                          &uscf->shm_zone->shm.name, &uscf->host);
+            return NGX_ERROR;
+        }
+
+        lwcf = ngx_http_conf_upstream_srv_conf(uscf,
+                                           ngx_http_upstream_least_work_module);
+        lwcf->data = data;
+    }
+
+#endif
 
     return NGX_OK;
 }
@@ -242,7 +332,7 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
     ngx_uint_t                         i, n, p, ncand, round, primary;
     ngx_http_upstream_rr_peer_t       *peer, *best;
     ngx_http_upstream_rr_peers_t      *peers;
-    ngx_http_upstream_lw_conf_t       *lwcf;
+    ngx_http_upstream_lw_data_t       *lwd;
     ngx_http_upstream_lw_route_t      *route;
     ngx_http_upstream_rr_peer_data_t  *rrp;
 
@@ -250,7 +340,7 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
                    "get least work peer, try: %ui", pc->tries);
 
     rrp = &lwp->rrp;
-    lwcf = lwp->conf;
+    lwd = lwp->conf->data;
 
     lwp->index = -1;
 
@@ -266,17 +356,6 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
     peers = rrp->peers;
     primary = (peers == lwp->upstream->upstream->peer.data);
 
-    route = ngx_http_upstream_lw_route(lwcf, lwp->hash, 0);
-
-    if (route) {
-        cost = route->cost;
-
-    } else {
-        cost = lwcf->cost_all_set ? lwcf->cost_all : 0;
-    }
-
-    vdef = ngx_http_upstream_lw_speed(lwcf, -1);
-
     ngx_http_upstream_rr_peers_wlock(peers);
 
 #if (NGX_HTTP_UPSTREAM_ZONE)
@@ -284,6 +363,28 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
         goto busy;
     }
 #endif
+
+    /*
+     * the learned state is read and changed under the lock of the primary
+     * peers; backup servers have no learned state and are equal here, which
+     * leaves weighted round robin among them
+     */
+
+    cost = 0;
+    vdef = 1;
+
+    if (primary) {
+        route = ngx_http_upstream_lw_route(lwd, lwp->hash, 0);
+
+        if (route) {
+            cost = route->cost;
+
+        } else if (lwd->cost_all_set) {
+            cost = lwd->cost_all;
+        }
+
+        vdef = ngx_http_upstream_lw_speed(lwd, -1);
+    }
 
     /* the least estimate: calibration * (work in progress + predicted time) */
 
@@ -317,7 +418,7 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
         }
 
         k = primary ? (ngx_int_t) i : -1;
-        e = ngx_http_upstream_lw_estimate(lwcf, k, cost, vdef, &pred, &work);
+        e = ngx_http_upstream_lw_estimate(lwd, k, cost, vdef, &pred, &work);
 
         ngx_log_debug5(NGX_LOG_DEBUG_HTTP, pc->log, 0,
                        "least work peer %ui: estimate %.3f, predicted %.3f, "
@@ -381,7 +482,7 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
             }
 
             k = primary ? (ngx_int_t) i : -1;
-            e = ngx_http_upstream_lw_estimate(lwcf, k, cost, vdef, &pred,
+            e = ngx_http_upstream_lw_estimate(lwd, k, cost, vdef, &pred,
                                               &work);
 
             if (e > best_e + NGX_HTTP_LW_TIE) {
@@ -441,14 +542,14 @@ ngx_http_upstream_get_least_work_peer(ngx_peer_connection_t *pc, void *data)
 
     rrp->tried[n] |= m;
 
-    ngx_http_upstream_rr_peers_unlock(peers);
-
-    if (primary && p < lwcf->nstates) {
+    if (primary && p < lwd->nstates) {
         lwp->index = p;
         lwp->pred = best_pred;
         lwp->delay = best_work + best_pred;
-        lwcf->states[p].work += best_pred;
+        lwd->states[p].work += best_pred;
     }
+
+    ngx_http_upstream_rr_peers_unlock(peers);
 
     return NGX_OK;
 
@@ -497,12 +598,20 @@ ngx_http_upstream_free_least_work_peer(ngx_peer_connection_t *pc,
     ngx_http_upstream_lw_peer_data_t *lwp = data;
 
     ngx_http_upstream_t               *u;
+    ngx_http_upstream_rr_peers_t      *peers;
     ngx_http_upstream_lw_state_t      *st;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, pc->log, 0, "free least work peer");
 
     if (lwp->index >= 0) {
-        st = &lwp->conf->states[lwp->index];
+
+        /* the peer was selected from the primary peers: lock them */
+
+        peers = lwp->rrp.peers;
+
+        ngx_http_upstream_rr_peers_wlock(peers);
+
+        st = &lwp->conf->data->states[lwp->index];
 
         st->work -= lwp->pred;
 
@@ -523,6 +632,8 @@ ngx_http_upstream_free_least_work_peer(ngx_peer_connection_t *pc,
             ngx_http_upstream_lw_learn(lwp, (double) u->state->response_time);
         }
 
+        ngx_http_upstream_rr_peers_unlock(peers);
+
         lwp->index = -1;
     }
 
@@ -531,14 +642,14 @@ ngx_http_upstream_free_least_work_peer(ngx_peer_connection_t *pc,
 
 
 static double
-ngx_http_upstream_lw_speed(ngx_http_upstream_lw_conf_t *lwcf, ngx_int_t i)
+ngx_http_upstream_lw_speed(ngx_http_upstream_lw_data_t *data, ngx_int_t i)
 {
     double      sum;
     ngx_uint_t  j, n;
 
-    if (i >= 0 && (ngx_uint_t) i < lwcf->nstates && lwcf->states[i].learned) {
-        return lwcf->states[i].num
-               / ngx_max(lwcf->states[i].den, NGX_HTTP_LW_FLOOR);
+    if (i >= 0 && (ngx_uint_t) i < data->nstates && data->states[i].learned) {
+        return data->states[i].num
+               / ngx_max(data->states[i].den, NGX_HTTP_LW_FLOOR);
     }
 
     /* not learned yet: the mean of the learned speeds, on their scale */
@@ -546,10 +657,10 @@ ngx_http_upstream_lw_speed(ngx_http_upstream_lw_conf_t *lwcf, ngx_int_t i)
     sum = 0;
     n = 0;
 
-    for (j = 0; j < lwcf->nstates; j++) {
-        if (lwcf->states[j].learned) {
-            sum += lwcf->states[j].num
-                   / ngx_max(lwcf->states[j].den, NGX_HTTP_LW_FLOOR);
+    for (j = 0; j < data->nstates; j++) {
+        if (data->states[j].learned) {
+            sum += data->states[j].num
+                   / ngx_max(data->states[j].den, NGX_HTTP_LW_FLOOR);
             n++;
         }
     }
@@ -559,7 +670,7 @@ ngx_http_upstream_lw_speed(ngx_http_upstream_lw_conf_t *lwcf, ngx_int_t i)
 
 
 static double
-ngx_http_upstream_lw_estimate(ngx_http_upstream_lw_conf_t *lwcf, ngx_int_t i,
+ngx_http_upstream_lw_estimate(ngx_http_upstream_lw_data_t *data, ngx_int_t i,
     double cost, double vdef, double *pred, double *work)
 {
     double                         v, cal;
@@ -569,8 +680,8 @@ ngx_http_upstream_lw_estimate(ngx_http_upstream_lw_conf_t *lwcf, ngx_int_t i,
     cal = 1;
     *work = 0;
 
-    if (i >= 0 && (ngx_uint_t) i < lwcf->nstates) {
-        st = &lwcf->states[i];
+    if (i >= 0 && (ngx_uint_t) i < data->nstates) {
+        st = &data->states[i];
 
         if (st->learned) {
             v = st->num / ngx_max(st->den, NGX_HTTP_LW_FLOOR);
@@ -591,7 +702,7 @@ ngx_http_upstream_lw_estimate(ngx_http_upstream_lw_conf_t *lwcf, ngx_int_t i,
 
 
 static ngx_http_upstream_lw_route_t *
-ngx_http_upstream_lw_route(ngx_http_upstream_lw_conf_t *lwcf, uint32_t hash,
+ngx_http_upstream_lw_route(ngx_http_upstream_lw_data_t *data, uint32_t hash,
     ngx_uint_t create)
 {
     ngx_uint_t                     k, j;
@@ -599,7 +710,7 @@ ngx_http_upstream_lw_route(ngx_http_upstream_lw_conf_t *lwcf, uint32_t hash,
 
     for (k = 0; k < NGX_HTTP_LW_PROBES; k++) {
         j = (hash + k) & (NGX_HTTP_LW_ROUTES - 1);
-        r = &lwcf->routes[j];
+        r = &data->routes[j];
 
         if (r->hash == hash) {
             return r;
@@ -635,11 +746,13 @@ ngx_http_upstream_lw_learn(ngx_http_upstream_lw_peer_data_t *lwp, double rt)
     double                          a, v, x, k_old;
     ngx_uint_t                      known;
     ngx_http_upstream_lw_conf_t    *lwcf;
+    ngx_http_upstream_lw_data_t    *data;
     ngx_http_upstream_lw_route_t   *route;
     ngx_http_upstream_lw_state_t   *st;
 
     lwcf = lwp->conf;
-    st = &lwcf->states[lwp->index];
+    data = lwcf->data;
+    st = &data->states[lwp->index];
 
     ngx_log_debug5(NGX_LOG_DEBUG_HTTP, lwp->upstream->peer.log, 0,
                    "least work learn peer %i: rt %.0f, conns %ui, "
@@ -668,27 +781,27 @@ ngx_http_upstream_lw_learn(ngx_http_upstream_lw_peer_data_t *lwp, double rt)
     }
 
     a = lwcf->alpha;
-    v = ngx_http_upstream_lw_speed(lwcf, lwp->index);
+    v = ngx_http_upstream_lw_speed(data, lwp->index);
     x = rt * v;
 
-    route = ngx_http_upstream_lw_route(lwcf, lwp->hash, 0);
+    route = ngx_http_upstream_lw_route(data, lwp->hash, 0);
     known = (route != NULL);
     k_old = known ? route->cost : 0;
 
     if (!known) {
-        route = ngx_http_upstream_lw_route(lwcf, lwp->hash, 1);
+        route = ngx_http_upstream_lw_route(data, lwp->hash, 1);
         route->cost = x;
 
     } else {
         route->cost += a * (x - route->cost);
     }
 
-    if (lwcf->cost_all_set) {
-        lwcf->cost_all += a * (x - lwcf->cost_all);
+    if (data->cost_all_set) {
+        data->cost_all += a * (x - data->cost_all);
 
     } else {
-        lwcf->cost_all = x;
-        lwcf->cost_all_set = 1;
+        data->cost_all = x;
+        data->cost_all_set = 1;
     }
 
     if (!known || k_old <= 0) {
@@ -722,8 +835,7 @@ ngx_http_upstream_least_work_create_conf(ngx_conf_t *cf)
      * set by ngx_pcalloc():
      *
      *     conf->key = NULL;
-     *     conf->routes = NULL;
-     *     conf->states = NULL;
+     *     conf->data = NULL;
      */
 
     conf->alpha = 0.02;

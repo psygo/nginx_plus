@@ -36,27 +36,23 @@ Explorations, opened inside this fork against `least-time-work` (not sent to ngi
 | [#5](https://github.com/psygo/nginx_plus/pull/5): learning-augmented balancing with a floor | `explore/learning-augmented` | research only |
 | [#6](https://github.com/psygo/nginx_plus/pull/6): unbiased `smooth=` weighting | `explore/smooth-weighting` | rejected; PR 2 unchanged |
 
-The simulator is also published on its own, for reuse beyond these pull requests: [psygo/lbsim](https://github.com/psygo/lbsim) (the same engine, the scenarios behind the PRs, a comparison tool, the queueing-theory validation and tests).
+The simulator, every simulation experiment and all their results are in [psygo/nginx_sim](https://github.com/psygo/nginx_sim): the evidence for the two pull requests in `research/pr`, the explorations in `research/explore`, with an index and verdicts in [research/Docs.md](https://github.com/psygo/nginx_sim/blob/main/research/Docs.md). This repository keeps the nginx code, the real-nginx benchmark and its results, the pull request texts and the decision log of rejected ideas.
 
 ## Reports
 
-- [results/sim_pr.md](results/sim_pr.md): simulation, 12 scenarios × 4 loads, 20 paired seeds × 300,000 requests per cell, plus a bucket × smooth sweep (10 seeds × 200,000).
-- [results/sim_validation.md](results/sim_validation.md): the simulator checked against exact queueing-theory formulas (also at the end of `sim_pr.md`).
+- [sim_pr.md](https://github.com/psygo/nginx_sim/blob/main/research/results/sim_pr.md) (in nginx_sim): simulation, 12 scenarios × 4 loads, 20 paired seeds × 300,000 requests per cell, plus a bucket × smooth sweep (10 seeds × 200,000).
+- [validation.md](https://github.com/psygo/nginx_sim/blob/main/research/results/validation.md) (in nginx_sim): the simulator checked against exact queueing-theory formulas (also at the end of `sim_pr.md`).
 - [results/rejected_ideas.md](results/rejected_ideas.md): ideas that were tried and not proposed (power of two choices, a service-rate rule, smaller tweaks), with data and reasons.
 - [results/linux_pr.md](results/linux_pr.md): real nginx on Linux, 18 configurations × 6 variants × 5 paired repetitions, with a simulator-vs-real comparison.
 - [pr/PR1.md](pr/PR1.md), [pr/PR2.md](pr/PR2.md): pull request descriptions; [pr/](pr/) also holds the commit messages.
-- [results/figs/](results/figs/): charts for the pull requests, each in a light and a dark version (PNG for GitHub, SVG source), drawn by `sim/charts.py` from stored results: `python3 sim/figs_pr.py` for PR 1 and PR 2; each exploration branch has a `figs` command for its own.
+- [results/figs/](results/figs/): charts of the real-nginx results, each in a light and a dark version (PNG for GitHub, SVG source), drawn with nginx_sim's `charts` from stored results: `python3 bench/linux/figs_pr2.py` for PR 2; the exploration branches' reports draw their own. The simulation charts, PR 1's among them, are in nginx_sim.
 - [PLAN.md](PLAN.md): working notes, with the earlier hypotheses (H1 to H6) and prototype measurements.
 
 ## Layout
 
 | path | content |
 | --- | --- |
-| `sim/lbsim.py` | discrete-event simulator of nginx balancers. `LeastTime` is stock; `LeastTimePatch` reproduces the patched C arithmetic. |
-| `sim/experiments.py` | scenarios and job sets (`pr`, `sweep`, and the earlier `h1`... sets) |
-| `sim/report_pr.py` | builds `results/sim_pr.md` and the simulation figures |
-| `sim/validate.py` | checks the simulator against queueing-theory formulas (M/M/1, M/M/c, M/G/1, PS) |
-| `bench/linux/` | real-nginx benchmark: Dockerfile, Go backend and open-loop load generator, `run.py`, `matrix.sh`, `report_linux.py` |
+| `bench/linux/` | real-nginx benchmark: Dockerfile, Go backend and open-loop load generator, `run.py`, `matrix.sh`, `report_linux.py` (with the simulator-vs-real comparison), `figs_pr2.py`; `nginx_sim_path.py` finds the nginx_sim checkout the reports read |
 | `bench/*.py`, `bench/exp_*.sh` | earlier macOS harness (Python backends, `-O0` builds), superseded by `bench/linux/` |
 | `build/mkvariant.sh` | builds `lt-trace` variants for the macOS harness |
 | `patches/` | the three nginx patches, the nginx-tests change and the nginx.org docs change |
@@ -66,20 +62,21 @@ The simulator is also published on its own, for reuse beyond these pull requests
 
 ### Simulation
 
-Python 3, no dependencies. From this branch's root:
+In [psygo/nginx_sim](https://github.com/psygo/nginx_sim), from its root (Python 3, no dependencies):
 
-    python3 sim/experiments.py pr --seeds 20 --n 300000
-    python3 sim/experiments.py sweep --seeds 10 --n 200000
-    python3 sim/validate.py          # about a minute
-    python3 sim/report_pr.py
+    python3 -m research.pr.experiments pr --seeds 20 --n 300000
+    python3 -m research.pr.experiments sweep --seeds 10 --n 200000
+    python3 validate.py              # about a minute
+    python3 -m research.pr.report_pr
 
-Jobs run in parallel on all cores (`--jobs` to change it).
+Jobs run in parallel on all cores (`--jobs` to change it). The reports here that compare with the simulator (`report_linux.py` and the exploration branches' reports) read nginx_sim's results and use its charts: clone it next to this repository, or set `NGINX_SIM` to its path.
 
 ### Real nginx (Linux)
 
 The benchmark expects a workspace where this branch sits next to the nginx sources:
 
     git clone -b least-time-evidence https://github.com/psygo/nginx_plus.git work
+    git clone https://github.com/psygo/nginx_sim.git
     cd work
     git clone https://github.com/psygo/nginx_plus.git nginx
     git -C nginx worktree add ../nginx-fp     lt-fixed-point

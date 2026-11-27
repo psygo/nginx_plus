@@ -2,15 +2,15 @@
 
 These are the ideas that were tried and not proposed, with the data, the reason, and what would change the verdict. They are kept so they don't get re-tried blindly, and because a reviewer may well ask "did you consider X?".
 
-All simulation numbers are p99 latency in ms, the mean over seeds. The scenarios are described in [sim_pr.md](sim_pr.md#scenarios).
+All simulation numbers are p99 latency in ms, the mean over seeds. The simulation data and reports are in [psygo/nginx_sim](https://github.com/psygo/nginx_sim) (`research/results`), and the scenarios are described in [sim_pr.md](https://github.com/psygo/nginx_sim/blob/main/research/results/sim_pr.md#scenarios).
 
-The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is weaker evidence than the 20 × 300,000 of the PR matrix. Differences under about 5 % in them are noise. The conclusions below rest on larger differences.
+The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is weaker evidence than the 20 × 300,000 of the PR matrix. Differences under about 5 % in them are noise. The conclusions below rest on larger differences. These sweeps were also run with an earlier version of the simulator: re-running them with the current one moves p99 by a few percent, and the conclusions were not re-checked with it (nginx_sim, `research/Docs.md`, Reproducibility).
 
 ## 1. Power of two choices
 
 **Idea.** Instead of scanning every server, pick two at random and send the request to the better of the two. This is a classic queueing-theory result (Mitzenmacher; Vvedenskaya et al.): two random choices are exponentially better than one. Finagle and Linkerd balance this way, and NGINX Plus offers `random two least_time`. Open-source nginx only has `random two least_conn`, so adding `least_time` there looked like an easy feature.
 
-**Experiment.** H5, in `results/sim_h5.json`. Servers have random speeds between ½ and 2 (`bigN`). Two setups: 1 worker with shared state, and 8 workers each with private state (nginx without `zone`).
+**Experiment.** H5, in `sim_h5.json` (nginx_sim). Servers have random speeds between ½ and 2 (`bigN`). Two setups: 1 worker with shared state, and 8 workers each with private state (nginx without `zone`).
 
 | servers | load | workers | least_conn | least_time | random two least_conn | random two least_time | P2C Peak EWMA |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ The early experiments (H3, H5, H6) used 5 seeds × 100,000 requests, which is we
 
 **Idea.** `least_time` multiplies the average *response* time by the number of requests in progress. A response time already includes time spent waiting, so the wait gets counted twice. Queueing theory's shortest-expected-delay rule uses the *service* time instead. So the idea was to estimate each server's service time as `response_time / (1 + requests in progress when it was sent)`, which is exact for a server that handles one request at a time in arrival order (FCFS), and to choose the server with the lowest `service_time × (1 + in progress)`.
 
-**Experiment.** H3 (`results/sim_h3.json`) covers the slowdown scenarios: one of 4 servers drops to ¼ speed for 20 s, and p99 is measured during the slow window. The backends are FCFS with 1 worker, FCFS with 4 workers (`_c4`), and processor sharing (`_ps`). H6 (`results/sim_h6.json`) covers mixed 2 ms / 80 ms requests.
+**Experiment.** H3 (`sim_h3.json` in nginx_sim) covers the slowdown scenarios: one of 4 servers drops to ¼ speed for 20 s, and p99 is measured during the slow window. The backends are FCFS with 1 worker, FCFS with 4 workers (`_c4`), and processor sharing (`_ps`). H6 (`results/sim_h6.json`) covers mixed 2 ms / 80 ms requests.
 
 | scenario | load | least_conn | least_time | least_time, bucket 1 | service-rate rule |
 | --- | --- | --- | --- | --- | --- |

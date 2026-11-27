@@ -4,7 +4,7 @@ I've been looking at nginx's load balancing through [queueing theory](https://en
 
 This PR is the smallest of those findings: a rounding error in the averages least_time keeps. On its own it changes little with the default settings (p99 within ±4 % on real nginx), but a follow-up PR depends on it: that PR makes the 20 ms clustering configurable, which improves p99 by 9-44 % on real nginx when servers differ in speed.
 
-The simulator, data and benchmark scripts are in [this branch](https://github.com/psygo/nginx_plus/tree/least-time-evidence). I couldn't find a load-balancing simulator in the nginx ecosystem; if one would be useful, I'd be happy to open a discussion about it.
+The benchmark scripts and data are in [this branch](https://github.com/psygo/nginx_plus/tree/least-time-evidence), and the simulator, with every simulation result, in [psygo/nginx_sim](https://github.com/psygo/nginx_sim). I couldn't find a load-balancing simulator in the nginx ecosystem; if one would be useful, I'd be happy to open a discussion about it.
 
 Follow-up: #2050 makes the 20 ms clustering configurable (`bucket=`) and adds time-based smoothing (`smooth=`); it depends on this fix.
 
@@ -45,11 +45,11 @@ It matters as soon as the clustering is finer than the error. A follow-up pull r
 | 16 servers of unequal speed, 10 ms mean | -5 % | -12 % |
 | 8 servers of unequal speed, lognormal times | -4 % | -9 % |
 
-p99 relative to stock `least_time`, geometric mean over 10 paired seeds × 200,000 requests (`results/sim_pr1_bucket.json` in the evidence branch).
+p99 relative to stock `least_time`, geometric mean over 10 paired seeds × 200,000 requests (`research/results/sim_pr1_bucket.json` in [nginx_sim](https://github.com/psygo/nginx_sim)).
 
 ## Testing
 
-- [x] Manual Testing: debug traces of the averages before and after (above); simulator and Linux benchmark runs (https://github.com/psygo/nginx_plus/tree/least-time-evidence)
+- [x] Manual Testing: debug traces of the averages before and after (above); simulator runs (https://github.com/psygo/nginx_sim) and Linux benchmark runs (https://github.com/psygo/nginx_plus/tree/least-time-evidence)
 - [x] Functional Testing ([nginx-tests](https://github.com/nginx/nginx-tests)): all `upstream*.t` and `stream_upstream*.t` pass, also with `TEST_NGINX_UNSAFE=1`, on macOS/clang and Linux/gcc 14 with `-Werror`
 
 No new test: with the default 20 ms clustering the fix does not change which server is selected, so it cannot be observed from outside nginx, which is how nginx-tests work. It becomes observable with a finer clustering, and the follow-up adds tests there.

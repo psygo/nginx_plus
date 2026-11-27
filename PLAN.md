@@ -23,8 +23,8 @@ Workspace layout (the workspace folder holds the whole nginx ecosystem, one chec
 Two PRs to nginx/nginx, both open, no maintainer review yet:
 
 - **PR 1, bug fix:** [nginx/nginx#2048](https://github.com/nginx/nginx/pull/2048) from `lt-fixed-point`, patch `0001` (fixed-point averages); F5 CLA signed. Description in `pr/PR1.md`, commit message in `pr/commit-1-fixed-point.txt`.
-- **PR 2, features:** [nginx/nginx#2050](https://github.com/nginx/nginx/pull/2050) from `lt-smooth`, patches `0002` (`bucket=time`) and `0003` (`smooth=time`, weight `min(1, max(0.01, elapsed/smooth))`, 0.01 floor fixed in code), on top of PR 1. Description in `pr/PR2.md`. Its body still links the companion PRs as `#TBD`.
-- **PR 2 companions, not opened yet:** nginx-tests (branch `lt-bucket`, `patches/tests-pr2-...`) and nginx.org docs (branch `least-time-bucket-smooth`, `patches/docs-pr2-...`, version 1.31.12 is a placeholder). The forks github.com/psygo/nginx-tests and github.com/psygo/nginx.org exist (2026-11-27).
+- **PR 2, features:** [nginx/nginx#2050](https://github.com/nginx/nginx/pull/2050) from `lt-smooth`, patches `0002` (`bucket=time`) and `0003` (`smooth=time`, weight `min(1, max(0.01, elapsed/smooth))`, 0.01 floor fixed in code), on top of PR 1. Description in `pr/PR2.md`.
+- **PR 2 companions, open (2026-11-27):** [nginx/nginx-tests#209](https://github.com/nginx/nginx-tests/pull/209) from psygo/nginx-tests `lt-bucket` (tests in their own files, `upstream_least_time_bucket_smooth.t` and `stream_upstream_least_time_bucket_smooth.t`, so nginx without the parameters skips only them; text in `pr/PR2-tests.md`) and [nginx/nginx.org#373](https://github.com/nginx/nginx.org/pull/373) from psygo/nginx.org `least-time-bucket-smooth` (version 1.31.12 is a placeholder; text in `pr/PR2-docs.md`). #2050's description links both.
 
 Evidence:
 
@@ -32,9 +32,9 @@ Evidence:
 - Linux real-nginx matrix (`results/linux_pr.md`): 18 configurations × 6 variants × 5 paired reps, 540 runs, 0 errors, and the sim matches within a few percent.
   - P1 is −4…+4 %.
   - P1+P2+P3 gives −9…−44 % on heterogeneous backends, −11…−14 % on bimodal, and −12 % on slowdown; it is never significantly worse than stock or than least_conn.
-- nginx-tests: `upstream*.t` and `stream_upstream*.t` pass on macOS/clang and Linux/gcc 14 (`-Werror`, run as root with `TEST_NGINX_GLOBALS="user root;"`).
+- nginx-tests: `upstream*.t` and `stream_upstream*.t` pass on Linux/gcc 14 (`-Werror`, run as root with `TEST_NGINX_GLOBALS="user root;"`; 40 files, 435 tests, 2026-11-27) and passed on macOS/clang before the new tests moved to their own files. With `TEST_NGINX_UNSAFE=1`, `equal last byte time average` in `stream_upstream_least_time.t` fails occasionally, on stock nginx too (1 run in 3).
 
-Remaining: open the two companion PRs, then replace the `#TBD` links in #2050's description.
+Remaining: wait for review; update the docs version once nginx picks the release.
 
 ## Explorations (2026-11-26)
 

@@ -22,8 +22,8 @@ The code lives on other branches of this fork:
 | --- | --- | --- | --- |
 | [nginx/nginx#2048](https://github.com/nginx/nginx/pull/2048): fixed rounding of least_time averages | `lt-fixed-point` | open, F5 CLA signed (2026-11-26) | [pr/PR1.md](pr/PR1.md) |
 | [nginx/nginx#2050](https://github.com/nginx/nginx/pull/2050): `bucket` and `smooth` parameters of `least_time` | `lt-smooth` | open; depends on #2048 (#2049 was opened from `least-time-work` by mistake and closed) | [pr/PR2.md](pr/PR2.md) |
-| PR 2 tests (nginx/nginx-tests) | `lt-bucket` on [psygo/nginx-tests](https://github.com/psygo/nginx-tests/tree/lt-bucket) | not opened yet | `patches/tests-pr2-*` |
-| PR 2 docs (nginx/nginx.org) | `least-time-bucket-smooth` on [psygo/nginx.org](https://github.com/psygo/nginx.org/tree/least-time-bucket-smooth) | not opened yet | `patches/docs-pr2-*` |
+| [nginx/nginx-tests#209](https://github.com/nginx/nginx-tests/pull/209): PR 2 tests | `lt-bucket` on psygo/nginx-tests | open (2026-11-27) | [pr/PR2-tests.md](pr/PR2-tests.md), `patches/tests-pr2-*` |
+| [nginx/nginx.org#373](https://github.com/nginx/nginx.org/pull/373): PR 2 docs | `least-time-bucket-smooth` on psygo/nginx.org | open (2026-11-27); version 1.31.12 is a placeholder | [pr/PR2-docs.md](pr/PR2-docs.md), `patches/docs-pr2-*` |
 
 Explorations, opened inside this fork against `least-time-work` (not sent to nginx). Their simulations are in nginx_sim; #2, #4, #5 and #6 were simulation only and are closed, and #1 and #3 keep their real-nginx and C parts:
 

@@ -1,6 +1,7 @@
 """Report for the real-nginx Linux runs, plus simulator-vs-real validation.
 
-Reads results/linux_*.jsonl (bench/linux/run.py) and results/sim_pr.json.
+Reads results/linux_*.jsonl (bench/linux/run.py) and the simulator's
+research/results/sim_pr.json from nginx_sim (see nginx_sim_path.py).
 Writes results/linux_pr.md and results/fig_linux_p99_vs_stock.svg.
 
 Each repetition r used the same arrivals and per-request costs (loadgen
@@ -14,10 +15,13 @@ import json
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import nginx_sim_path  # noqa: E402,F401  (puts nginx_sim on sys.path)
+from nginx_sim.stats import fmt_ratio, mean_ci, paired_ratio  # noqa: E402
+from research.pr.report_pr import LABEL, SCEN, dotplot, load  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(ROOT, "sim"))
-from report_pr import (LABEL, SCEN, RES, mean_ci, paired_ratio,  # noqa: E402
-                       fmt_ratio, dotplot, load)
+RES = os.path.join(ROOT, "results")
 
 
 def disturbed(rows, key):

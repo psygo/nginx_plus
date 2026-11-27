@@ -22,10 +22,10 @@ The code lives on other branches of this fork:
 | --- | --- | --- | --- |
 | [nginx/nginx#2048](https://github.com/nginx/nginx/pull/2048): fixed rounding of least_time averages | `lt-fixed-point` | open, F5 CLA signed (2026-11-26) | [pr/PR1.md](pr/PR1.md) |
 | [nginx/nginx#2050](https://github.com/nginx/nginx/pull/2050): `bucket` and `smooth` parameters of `least_time` | `lt-smooth` | open; depends on #2048 (#2049 was opened from `least-time-work` by mistake and closed) | [pr/PR2.md](pr/PR2.md) |
-| PR 2 tests (nginx/nginx-tests) | local only | not opened yet; needs a fork of nginx-tests | `patches/tests-pr2-*` |
-| PR 2 docs (nginx/nginx.org) | local only | not opened yet; needs a fork of nginx.org | `patches/docs-pr2-*` |
+| PR 2 tests (nginx/nginx-tests) | `lt-bucket` on [psygo/nginx-tests](https://github.com/psygo/nginx-tests/tree/lt-bucket) | not opened yet | `patches/tests-pr2-*` |
+| PR 2 docs (nginx/nginx.org) | `least-time-bucket-smooth` on [psygo/nginx.org](https://github.com/psygo/nginx.org/tree/least-time-bucket-smooth) | not opened yet | `patches/docs-pr2-*` |
 
-Explorations, opened inside this fork against `least-time-work` (not sent to nginx):
+Explorations, opened inside this fork against `least-time-work` (not sent to nginx). Their simulations are in nginx_sim; #2, #4, #5 and #6 were simulation only and are closed, and #1 and #3 keep their real-nginx and C parts:
 
 | PR | branch | verdict |
 | --- | --- | --- |

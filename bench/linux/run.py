@@ -40,6 +40,11 @@ SCENARIOS = {
     "bimodal4":     dict(speeds=[1] * 4, dist="bimodal:2,80,0.1"),
     "bimodal4_het": dict(speeds=[2, 1, 1, 0.5], dist="bimodal:2,80,0.1"),
     "homog8":       dict(speeds=[1] * 8, dist="exp:10"),
+    # cost routing (research/explore/cost_routing.py in nginx_sim): one route per request class
+    "cr_bimodal_het4": dict(speeds=[2, 1, 1, 0.5], dist="classes:2,0.9,80,0.1"),
+    "cr_bimodal_het8": dict(speeds=HETERO8, dist="classes:2,0.9,80,0.1"),
+    "cr_api3_het4":    dict(speeds=[2, 1, 1, 0.5], dist="classes:1,0.7,10,0.25,200,0.05"),
+    "cr_api3_het8":    dict(speeds=HETERO8, dist="classes:1,0.7,10,0.25,200,0.05"),
     "slowdown":     dict(speeds=[1] * 4, dist="exp:10", duration=60,
                          slow="25:20:0.25", window="20:40"),
 }
@@ -52,7 +57,17 @@ VARIANTS = {
     "p12_b5":      ("p12", "least_time header bucket=5ms"),
     "p123_b5_s3":  ("p123", "least_time header bucket=5ms smooth=3s"),
     "p13_s3":      ("p123", "least_time header smooth=3s"),
+    "least_work":  ("lw", "least_work key=$uri"),
+    # the prototype before its state moved into the zone (per worker always)
+    "least_work_old": ("lw-old", "least_work key=$uri"),
+    # stream proxy (STREAM_CONF): one listen port per request class, one
+    # session per request; least_time first_byte is the stream "header"
+    "stream_least_conn": ("lw", "least_conn"),
+    "stream_p123_b5_s3": ("p123", "least_time first_byte bucket=5ms smooth=3s"),
+    "stream_least_work": ("lw", "least_work key=$server_port"),
 }
+
+STREAM_PORT_BASE = 8900
 
 NGINX_CONF = """
 worker_processes {workers};
@@ -89,6 +104,40 @@ http {{
 """
 
 
+STREAM_CONF = """
+worker_processes {workers};
+pid {run}/nginx.pid;
+error_log {run}/error.log warn;
+worker_rlimit_nofile 65536;
+
+events {{
+    worker_connections 16384;
+}}
+
+stream {{
+    upstream u {{
+        {zone}
+        {directive};
+{servers}
+    }}
+
+    server {{
+        listen 127.0.0.1:8899 backlog=8192{reuseport};
+{listens}
+        proxy_pass u;
+        proxy_connect_timeout 5s;
+        proxy_timeout 60s;
+        proxy_next_upstream off;
+    }}
+}}
+"""
+
+
+def n_classes(dist):
+    kind, args = dist.split(":")
+    return len(args.split(",")) // 2 if kind == "classes" else 0
+
+
 def mean_cost(dist):
     kind, args = dist.split(":")
     a = [float(x) for x in args.split(",")]
@@ -98,6 +147,8 @@ def mean_cost(dist):
         return (1 - a[2]) * a[0] + a[2] * a[1]
     if kind == "lognormal":
         return a[0] * math.exp(a[1] ** 2 / 2)
+    if kind == "classes":
+        return sum(m * p for m, p in zip(a[0::2], a[1::2]))
     raise ValueError(dist)
 
 
@@ -136,10 +187,17 @@ def start_nginx(variant, sc, workers, zone):
     os.makedirs(RUN, exist_ok=True)
     servers = "\n".join(f"        server 127.0.0.1:{9001 + i} max_fails=0;"
                         for i in range(len(sc["speeds"])))
-    conf = NGINX_CONF.format(
-        workers=workers, run=RUN, directive=directive, servers=servers,
-        zone="zone u 1m;" if zone else "",
-        reuseport=" reuseport" if workers > 1 else "")
+    rp = " reuseport" if workers > 1 else ""
+    if variant.startswith("stream_"):
+        listens = "\n".join(f"        listen 127.0.0.1:{STREAM_PORT_BASE + c} backlog=8192{rp};"
+                             for c in range(n_classes(sc["dist"])))
+        conf = STREAM_CONF.format(
+            workers=workers, run=RUN, directive=directive, servers=servers,
+            zone="zone u 1m;" if zone else "", reuseport=rp, listens=listens)
+    else:
+        conf = NGINX_CONF.format(
+            workers=workers, run=RUN, directive=directive, servers=servers,
+            zone="zone u 1m;" if zone else "", reuseport=rp)
     with open(f"{RUN}/nginx.conf", "w") as f:
         f.write(conf)
     p = subprocess.Popen(["taskset", "-c", CPU_NGINX, f"{BIN}/nginx-{binary}",
@@ -176,6 +234,8 @@ def run_one(variant, scname, util, rep, args):
                "-dist", sc["dist"], "-seed", str(rep)]
         if sc.get("window"):
             cmd += ["-window", sc["window"]]
+        if variant.startswith("stream_"):
+            cmd += ["-class-port-base", str(STREAM_PORT_BASE), "-no-keepalive"]
         out = subprocess.run(cmd, capture_output=True, text=True, check=True,
                              env=dict(os.environ, GOGC="400"))
         res = json.loads(out.stdout)
